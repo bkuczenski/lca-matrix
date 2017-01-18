@@ -265,7 +265,7 @@ class ForegroundManager(object):
                 raise
         for exch in exchs:  # allocated exchanges, excluding reference exchs
             if exch.termination is None:
-                terms = [t for t in archive.terminate(exch)]
+                terms = [t for t in archive.terminate(exch, refs_only=True)]
                 if len(terms) == 0:
                     self.add_cutoff(parent, exch)
                     continue
@@ -290,8 +290,7 @@ class ForegroundManager(object):
 
         # name an SCC if we've found one
         if self.lowlink(parent) == self.index(parent):
-            pass
-        self.tstack.label_scc(parent.key)
+            self.tstack.label_scc(parent.key)
 
     def add_cutoff(self, parent, exchange):
         """
