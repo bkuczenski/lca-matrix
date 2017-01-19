@@ -1,4 +1,16 @@
 import os
+"""
+Tarjan's strongly connected components algorithm is recursive.  Python doesn't do well with deep recursion, so
+ultimately this code will need to be implemented on a more grown-up language.  For now, however, the recursion
+limit test that ships with python reported a segfault at a recursion limit exceeding 19100 -- bigger than ecoinvent!
+So for the time being we are safe.
+may need to use threading to go higher (see http://stackoverflow.com/questions/2917210/)
+Validate recursion depth on a given system using PYTHONROOT/Tools/scripts/find_recursionlimit.py
+"""
+import sys  # for recursion limit
+MAX_SAFE_RECURSION_LIMIT = 18000  # this should be validated using
+
+
 from collections import defaultdict, namedtuple
 from lcatools.exchanges import comp_dir, NoAllocation
 from lcatools.entities import LcProcess
@@ -12,7 +24,7 @@ class NoMatchingReference(Exception):
     pass
 
 
-def ambiguous_termination(exchange, terms, strategy):
+def resolve_termination(exchange, terms, strategy):
     """
          'cutoff' - call the flow a cutoff and ignore it
          'mix' - create a new "market" process that mixes the inputs
@@ -20,7 +32,7 @@ def ambiguous_termination(exchange, terms, strategy):
          'last' - take the last match (alphabetically by process name)
 
     :param exchange:
-    :param terms: a list of terminations for the exchange
+    :param terms:
     :param strategy:
     :return:
     """
@@ -30,8 +42,8 @@ def ambiguous_termination(exchange, terms, strategy):
         return None
     elif strategy == 'mix':
         p = LcProcess.new('Market for %s' % exchange.flow['Name'], Comment='Auto-generated')
-        p.add_reference(exchange.flow, comp_dir(exchange.direction))
         p.add_exchange(exchange.flow, comp_dir(exchange.direction), value=float(len(terms)))
+        p.add_reference(exchange.flow, comp_dir(exchange.direction))
         for t in terms:
             p.add_exchange(exchange.flow, exchange.direction, value=1.0, termination=t.get_uuid())
         return p
@@ -107,23 +119,31 @@ class ProductFlow(object):
     """
     def __init__(self, flow, process=None):
         """
-        Initialize a row in the technology matrix.  Each row corresponds to a reference exchange in the database, and
-        thus represents a particular process generating / consuming a particular flow.
+        Initialize a row+column in the technology matrix.  Each row corresponds to a reference exchange in the database,
+        and thus represents a particular process generating / consuming a particular flow.  A ProductFlow entry is
+        akin to a fragment termination.
 
-        :param flow: the LcFlow entity that belongs to the parent node's exchange
-        :param process: the termination of the parent node's exchange; identity of the node. None is equivalent to a
-        cutoff flow or elementary flow.  If non-null, the process must possess a reference exchange with the same flow
-        or an error will be raised
+        :param flow: the LcFlow entity that represents the commodity (term_flow in the fragment sense)
+        :param process: the termination of the parent node's exchange (term_node). None is equivalent to a
+        cutoff flow or elementary flow (distinction is left to a compartment manager).  If non-null, the process must
+        possess a reference exchange with the same flow or the graph traversal may be curtailed.
         """
         self._flow = flow
         self._process = process
-        if process is None:
-            self._hash = (flow.get_uuid(), None)
-        else:
+
+        self._hash = (flow.get_uuid(), None)
+        self._inbound_ev = 1.0
+        self._cutoff = True
+
+        if process is not None:
             if len([x for x in process.reference_entity
                     if x.flow == flow]) == 0:
-                raise NoMatchingReference('Flow: %s, Termination: %s' % (flow.get_uuid(), process.get_uuid()))
-            self._hash = (flow.get_uuid(), process.get_uuid())
+                # still a cutoff- raise a flag
+                print('NoMatchingReference: Flow: %s, Termination: %s' % (flow.get_uuid(), process.get_uuid()))
+            else:
+                self._cutoff = False
+                self._hash = (flow.get_uuid(), process.get_uuid())
+                self._inbound_ev = process.reference(flow).value
 
     def __eq__(self, other):
         if not isinstance(other, ProductFlow):
@@ -132,6 +152,18 @@ class ProductFlow(object):
 
     def __hash__(self):
         return hash(self._hash)
+
+    @property
+    def cutoff(self):
+        return self._cutoff
+
+    @property
+    def is_background(self):
+        """
+        part of the largest SCC or below
+        :return:
+        """
+        return self._background
 
     @property
     def key(self):
@@ -163,10 +195,12 @@ class ForegroundManager(object):
 
         :param data_dir:
         """
-        self._data_dir = data_dir
+        self._data_dir = data_dir  # save A / Bx in sparse form? Bx isn't sparse- A may be quicker than the json
         self._lowlink = dict()  # dict mapping product_flow to lowlink -- which is a key into TarjanStack.sccs
 
         self.tstack = TarjanStack()
+
+        self._terminations = dict()  # dict of dicts: maps archive ref to dict of reference flows.
 
         self._interior = []  # entries in the sparse A matrix
         self._cutoff = []  # entries in the sparse B matrix
@@ -226,6 +260,42 @@ class ForegroundManager(object):
         self._add_product_flow(pf)
         return pf
 
+    def _index_archive(self, archive):
+        """
+        Creates a dict of reference flows known to the archive.  The dict maps (flow, direction) to a list of
+        processes which terminate it.
+        :param archive:
+        :return:
+        """
+        ref_dict = defaultdict(list)
+        for p in archive.processes():
+            for rx in p.references():
+                ref_dict[(rx.flow, comp_dir(rx.direction))].append(p)
+        self._terminations[archive.ref] = ref_dict
+
+    def terminate(self, archive, exch, strategy):
+        """
+        Find the ProductFlow that terminates a given exchange.  If an exchange has an explicit termination, use it.
+        Otherwise, consult a local cache; and ask the archive [slow] if the cache is not populated.
+        :param archive:
+        :param exch:
+        :param strategy:
+        :return:
+        """
+        if archive.ref not in self._terminations:
+            self._index_archive(archive)
+        ref_dict = self._terminations[archive.ref]
+        key = (exch.flow, exch.direction)
+        if exch.termination is not None:
+            term = archive[exch.termination]
+        else:
+            if key in ref_dict:
+                terms = ref_dict[key]
+                term = resolve_termination(exch, terms, strategy)
+            else:
+                term = None
+        return term
+
     def add_ref_product(self, archive, flow, termination, multi_term='first', default_allocation=None):
         """
         Here we are adding a reference product - column of the A + B matrix.  The termination must be supplied.
@@ -241,10 +311,17 @@ class ForegroundManager(object):
         :param default_allocation: an LcQuantity to use for allocation if unallocated processes are encountered
         :return:
         """
+        old_recursion_limit = sys.getrecursionlimit()
+        required_recursion_limit = len(archive.processes())
+        if required_recursion_limit > MAX_SAFE_RECURSION_LIMIT:
+            raise EnvironmentError('This database may require too high a recursion limit-- time to learn lisp.')
+        sys.setrecursionlimit(required_recursion_limit)
         j = self._check_product_flow(flow, termination)
         if j is None:
             j = self._create_product_flow(flow, termination)
             self._traverse_term_exchanges(archive, j, multi_term, default_allocation)
+
+        sys.setrecursionlimit(old_recursion_limit)
         return j
 
     def _traverse_term_exchanges(self, archive, parent, multi_term, default_allocation=None):
@@ -264,15 +341,10 @@ class ForegroundManager(object):
             else:
                 raise
         for exch in exchs:  # allocated exchanges, excluding reference exchs
-            if exch.termination is None:
-                terms = [t for t in archive.terminate(exch, refs_only=True)]
-                if len(terms) == 0:
-                    self.add_cutoff(parent, exch)
-                    continue
-                else:
-                    term = ambiguous_termination(exch, terms, multi_term)
-            else:
-                term = archive[exch.termination]
+            term = self.terminate(archive, exch, multi_term)
+            if term is None:
+                self.add_cutoff(parent, exch)
+                continue
             i = self._check_product_flow(exch.flow, term)
             if i is None:
                 # not visited -- need to visit

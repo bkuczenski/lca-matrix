@@ -118,17 +118,17 @@ In this application, the allocation challenge is reduced _somewhat_ because the 
   
   * Processes with one reference flow, which appears in the interior matrix, will not require allocation.
   
-  * Processes with multiple reference flows, all of which appear in the interior matrix, will require allocation during linking.
-  
-  * Processes with multiple reference flows, of which at least one does not appear in the interior matrix, will be allocated over the interior flows only.  **Problem** (for which the solution is to add a market process
-  
+  * Processes with multiple reference flows, all expected to appear in the interior matrix, will require allocation during linking.
+    
+I will need to be able to specify allocations later on.
 
-
-#### Selecting among multiple producers
+#### Multiple producers
 
 In ecospold v2 (currently exclusively used to its full technical extent by ecoinvent), each interior flow features at least one _market_ process, which is a mixer of various production sources to form a marketed commodity for a specific region.  Market processes are an organizational tool that assigns production mix and transport requirements to every commodity.  Ecoinvent also uses "market groups" which are further idiosyncrasies of the ecospold-ecoinvent system, and which organize subsidiary markets into larger-scoped aggregations.
 
-The existence of market processes is ensured through the use of linking software such as [ocelot](http://ocelot.space) (currently also exclusively used for ecoinvent).  However, absent the expansion of scope of ocelot to include non-ecoinvent systems, this will have to be handled manually.
+The existence of market processes is ensured through the use of linking software such as [ocelot](http://ocelot.space) (currently also exclusively used for ecoinvent).
+
+In our case we can either assume a def
 
 
 
