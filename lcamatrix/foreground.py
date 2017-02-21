@@ -211,7 +211,7 @@ class ProductFlow(object):
         self._flow = flow
         self._process = process
 
-        self._hash = (flow.get_uuid(), None)
+        self._hash = (flow.uuid, None)
         self._inbound_ev = 1.0
 
         if process is None:
@@ -284,7 +284,7 @@ class Emission(object):
         self._flow = flow
         self._direction = direction
 
-        self._hash = (flow.get_uuid(), direction)
+        self._hash = (flow.uuid, direction)
 
     def __eq__(self, other):
         """
@@ -328,35 +328,36 @@ class BackgroundManager(object):
         """
         self.archive = archive
         self._data_dir = data_dir  # save A / Bx in sparse form? Bx isn't sparse- A may be quicker than the json
-        self._lowlinks = dict()  # dict mapping product_flow to lowlink -- which is a key into TarjanStack.sccs
+        self._lowlinks = dict()  # dict mapping product_flow key to lowlink -- which is a key into TarjanStack.sccs
 
         self.tstack = TarjanStack()
         self._a_matrix = None
         self._b_matrix = None
 
-        self._terminations = self._index_archive()  # dict of reference flows to terminating processes.
+        self._terminations = defaultdict(list)
+        self._index_archive()  # dict of reference flows to terminating processes.
 
         self._interior_incoming = []  # hold interior exchanges before adding them to the component graph
 
         self._interior = []  # entries in the sparse A matrix
         self._cutoff = []  # entries in the sparse B matrix
-        self._product_flows = dict()  # maps product_flow to index
+        self._product_flows = dict()  # maps product_flow key to index
         self._pf_index = []  # maps index to product_flow
 
         self._emissions = dict()
         self._ef_index = []
 
     def index(self, product_flow):
-        return self._product_flows[product_flow]
+        return self._product_flows[product_flow.key]
 
     def product_flow(self, index):
         return self._pf_index[index]
 
     def _lowlink(self, product_flow):
-        return self._lowlinks[product_flow]
+        return self._lowlinks[product_flow.key]
 
     def _add_product_flow(self, pf):
-        self._product_flows[pf] = pf.index
+        self._product_flows[pf.key] = pf.index
         self._set_lowlink(pf, pf.index)
         self._pf_index.append(pf)
         self.tstack.add_to_stack(pf)
@@ -368,10 +369,10 @@ class BackgroundManager(object):
         :param lowlink:
         :return:
         """
-        if pf in self._lowlinks:
-            self._lowlinks[pf] = min(self._lowlink(pf), lowlink)
+        if pf.key in self._lowlinks:
+            self._lowlinks[pf.key] = min(self._lowlink(pf), lowlink)
         else:
-            self._lowlinks[pf] = lowlink
+            self._lowlinks[pf.key] = lowlink
 
     def _check_product_flow(self, flow, termination):
         """
@@ -385,7 +386,7 @@ class BackgroundManager(object):
         else:
             k = (flow.uuid, termination.uuid)
         if k in self._product_flows:
-            return self.product_flow(self.index(k))
+            return self.product_flow(self._product_flows[k])
         else:
             return None
 
@@ -396,13 +397,13 @@ class BackgroundManager(object):
         return pf
 
     def _add_emission(self, flow, direction):
-        key = (flow, direction)
+        key = (flow.uuid, direction)
         if key in self._emissions:
             return self._ef_index[self._emissions[key]]
         else:
-            index = len(self._emissions)
+            index = len(self._ef_index)
             ef = Emission(index, flow, direction)
-            self._emissions[ef] = index
+            self._emissions[ef.key] = index
             self._ef_index.append(ef)
             return ef
 
@@ -412,11 +413,9 @@ class BackgroundManager(object):
         processes which terminate it.
         :return:
         """
-        ref_dict = defaultdict(list)
         for p in self.archive.processes():
             for rx in p.references():
-                ref_dict[(rx.flow, comp_dir(rx.direction))].append(p)
-        return ref_dict
+                self._terminations[(rx.flow.uuid, comp_dir(rx.direction))].append(p)
 
     def terminate(self, exch, strategy):
         """
@@ -426,14 +425,18 @@ class BackgroundManager(object):
         :param strategy:
         :return:
         """
-        key = (exch.flow, exch.direction)
         if exch.termination is not None:
             term = self.archive[exch.termination]
         else:
+            key = (exch.flow.uuid, exch.direction)
             if key in self._terminations:
                 terms = self._terminations[key]
-                term = resolve_termination(exch, terms, strategy)
+                if len(terms) == 1:
+                    term = terms[0]
+                else:
+                    term = resolve_termination(exch, terms, strategy)
             else:
+                self._terminations[key].append(None)
                 term = None
         return term
 
