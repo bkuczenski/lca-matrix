@@ -251,6 +251,10 @@ class ProductFlow(object):
 
     @property
     def key(self):
+        """
+        Product flow key is (uuid of reference flow, uuid of process)
+        :return:
+        """
         return self._hash
 
     @property
@@ -264,6 +268,9 @@ class ProductFlow(object):
     @property
     def inbound_ev(self):
         return self._inbound_ev
+
+    def __str__(self):
+        return '%s==%s' % (self._process, self._flow)
 
 
 class Emission(object):
@@ -306,6 +313,10 @@ class Emission(object):
 
     @property
     def key(self):
+        """
+        Key is (uuid of flow, direction relative to 'emitting' process)
+        :return:
+        """
         return self._hash
 
     @property
@@ -315,6 +326,9 @@ class Emission(object):
     @property
     def direction(self):
         return self._direction
+
+    def __str__(self):
+        return '%s: %s' % (self._direction, self._flow)
 
 
 class BackgroundManager(object):
@@ -336,16 +350,23 @@ class BackgroundManager(object):
 
         self._terminations = defaultdict(list)
         self._index_archive()  # dict of reference flows to terminating processes.
+        self._rec_limit = len(self.archive.processes())
+        if self.required_recursion_limit > MAX_SAFE_RECURSION_LIMIT:
+            raise EnvironmentError('This database may require too high a recursion limit-- time to learn lisp.')
 
         self._interior_incoming = []  # hold interior exchanges before adding them to the component graph
 
         self._interior = []  # entries in the sparse A matrix
-        self._cutoff = []  # entries in the sparse B matrix
         self._product_flows = dict()  # maps product_flow key to index
         self._pf_index = []  # maps index to product_flow
 
-        self._emissions = dict()
-        self._ef_index = []
+        self._cutoff = []  # entries in the sparse B matrix
+        self._emissions = dict()  # maps emission key to index
+        self._ef_index = []  # maps index to emission
+
+    @property
+    def required_recursion_limit(self):
+        return self._rec_limit
 
     def index(self, product_flow):
         return self._product_flows[product_flow.key]
@@ -378,7 +399,7 @@ class BackgroundManager(object):
         """
         returns the product flow if it exists, or None if it doesn't
         :param flow:
-        :param termination:
+        :param termination: the process whose reference flow is flow
         :return:
         """
         if termination is None:
@@ -442,7 +463,8 @@ class BackgroundManager(object):
 
     def _construct_b_matrix(self, bg_dict):
         """
-        bg_dict maps pf index to column index.
+        bg_dict maps pf index to column index. Only applies to background + downstream processes.
+        [foreground processes LCI will have to be computed the foreground way]
         :param bg_dict:
         :return:
         """
@@ -459,7 +481,7 @@ class BackgroundManager(object):
         num_bg = sp.array([[bg_dict[i.term.index], bg_dict[i.parent.index], i.value] for i in self._interior
                            if i.parent.index in bg_dict])
         self._a_matrix = csc_matrix((num_bg[:, 2], (num_bg[:, 0], num_bg[:, 1])))
-        #self._construct_b_matrix(bg_dict)
+        self._construct_b_matrix(bg_dict)
 
     def _update_component_graph(self):
         self.tstack.add_to_graph(self._interior_incoming)  # background should now be up to date
@@ -469,11 +491,19 @@ class BackgroundManager(object):
         if self._a_matrix is None and self.tstack.background is not None:
             self._construct_a_matrix()
 
+    def add_all_ref_products(self, multi_term='first', default_allocation=None):
+        for p in self.archive.processes():
+            for x in p.reference_entity:
+                j = self._check_product_flow(x.flow, p)
+                if j is None:
+                    j = self._add_ref_product(x.flow, p, multi_term, default_allocation)
+        self._update_component_graph()
+
     def add_ref_product(self, flow, termination, multi_term='first', default_allocation=None):
         """
         Here we are adding a reference product - column of the A + B matrix.  The termination must be supplied.
-        :param flow:
-        :param termination:
+        :param flow: a product flow
+        :param termination: a process that includes the product flow among its reference exchanges (input OR output)
         :param multi_term: ['first'] specify how to handle ambiguous terminations.  Possible answers are:
          'cutoff' - call the flow a cutoff and ignore it
          'mix' - create a new "market" process that mixes the inputs
@@ -483,18 +513,21 @@ class BackgroundManager(object):
         :param default_allocation: an LcQuantity to use for allocation if unallocated processes are encountered
         :return:
         """
-        old_recursion_limit = sys.getrecursionlimit()
-        required_recursion_limit = len(self.archive.processes())
-        if required_recursion_limit > MAX_SAFE_RECURSION_LIMIT:
-            raise EnvironmentError('This database may require too high a recursion limit-- time to learn lisp.')
-        sys.setrecursionlimit(required_recursion_limit)
         j = self._check_product_flow(flow, termination)
+
         if j is None:
-            j = self._create_product_flow(flow, termination)
-            self._traverse_term_exchanges(j, multi_term, default_allocation)
+            j = self._add_ref_product(flow, termination, multi_term, default_allocation)
+            self._update_component_graph()
+        return j
+
+    def _add_ref_product(self, flow, termination, multi_term, default_allocation):
+        old_recursion_limit = sys.getrecursionlimit()
+        sys.setrecursionlimit(self.required_recursion_limit)
+
+        j = self._create_product_flow(flow, termination)
+        self._traverse_term_exchanges(j, multi_term, default_allocation)
 
         sys.setrecursionlimit(old_recursion_limit)
-        self._update_component_graph()
         return j
 
     def _traverse_term_exchanges(self, parent, multi_term, default_allocation=None):

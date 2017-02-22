@@ -12,7 +12,7 @@ Other things that may also be required, but that don't yet have a clear mechanis
 
 
 from collections import namedtuple
-from lcatools.entities import MissingFactor
+from lcatools.entities import MissingAllocation
 
 '''
 A ConfigFlowCharacterization provides a procedural mechanism for specifying flow quantity characterizations after
@@ -79,7 +79,7 @@ def apply_allocation(archive, allocations, overwrite=False):
             for rf in p.reference_entity:
                 try:
                     is_alloc |= p.is_allocated(rf)
-                except MissingFactor:
+                except MissingAllocation:
                     is_alloc = True
                     break
 
