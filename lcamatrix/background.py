@@ -13,7 +13,7 @@ import scipy as sp
 from scipy.sparse import csc_matrix, csr_matrix
 
 from collections import defaultdict, namedtuple
-from lcatools.exchanges import comp_dir, NoAllocation
+from lcatools.exchanges import comp_dir
 from lcatools.entities import LcProcess
 
 MAX_SAFE_RECURSION_LIMIT = 18000  # this should be validated using
@@ -26,6 +26,10 @@ DEFAULT_DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
 
 
 class NoMatchingReference(Exception):
+    pass
+
+
+class NoAllocation(Exception):
     pass
 
 
@@ -607,19 +611,36 @@ class BackgroundManager(object):
         :param default_allocation:
         :return:
         """
-        try:
-            exchs = [x for x in parent.process.exchanges(parent.flow)]
-        except NoAllocation:
+        rx = parent.process.find_reference(parent.flow)
+        no_alloc = False
+        if not parent.process.is_allocated(rx):
             if default_allocation is not None:
                 parent.process.allocate_by_quantity(default_allocation)
-                exchs = [x for x in parent.process.exchanges(parent.flow)]
             else:
-                raise
-        for exch in exchs:  # allocated exchanges, excluding reference exchs
+                no_alloc = True
+
+        if no_alloc:
+            exchs = []
+        else:
+            exchs = [x for x in parent.process.exchanges()]
+
+        for exch in exchs:  # unallocated exchanges, including reference exchs
+            if exch in parent.process.reference_entity:
+                continue
+            val = exch[rx]
+            if val is None or val == 0:
+                # don't add zero entries (or descendants) to sparse matrix
+                continue
             term = self.terminate(exch, multi_term)
             if term is None:
-                self.add_cutoff(parent, exch)
+                # cutoff
+                emission = self._add_emission(exch.flow, exch.direction)  # check, create, and add all at once
+                self.add_cutoff(parent, emission, val)
                 continue
+
+            # interior flow-- enforce normative direction
+            if exch.direction == 'Output':
+                val *= -1
             i = self._check_product_flow(exch.flow, term)
             if i is None:
                 # not visited -- need to visit
@@ -633,38 +654,31 @@ class BackgroundManager(object):
             else:
                 # visited, not on stack- nothing to do
                 pass
-            self.add_interior(parent, exch, i)
+            self.add_interior(parent, i, val)
 
         # name an SCC if we've found one
         if self._lowlink(parent) == self.index(parent):
             self.tstack.label_scc(self.index(parent), parent.key)
 
-    def add_cutoff(self, parent, exchange):
+    def add_cutoff(self, parent, emission, val):
         """
         Create an exchange for a cutoff flow (incl. elementary flows)
-        :param parent:
-        :param exchange: an LcExchange belonging to the parent node
+        :param parent: product flow- B matrix column
+        :param emission: emission - B matrix row
+        :param val: raw exchange value
         """
-        if exchange.value is None or exchange.value == 0:
-            # don't add zero flows to a sparse matrix
-            return
-        emission = self._add_emission(exchange.flow, exchange.direction)
-        value = exchange.value / parent.inbound_ev
+        value = val / parent.inbound_ev
         self._cutoff.append(MatrixEntry(parent, emission, value))
 
-    def add_interior(self, parent, exchange, term):
+    def add_interior(self, parent, term, val):
         """
         Enforces the convention that interior exchanges are inputs; reference flows are outputs; symmetrically to
         inbound_ev determination in ProductFlow constructore
 
-        :param parent:
-        :param exchange:
-        :param term:
+        :param parent: product flow - A matrix column
+        :param term: product flow - A matrix row
+        :param val: raw (direction-adjusted) exchange value
         :return:
         """
-        if exchange.value is None or exchange.value == 0:
-            return
-        value = exchange.value / parent.inbound_ev
-        if exchange.direction == 'Output':
-            value *= -1
+        value = val / parent.inbound_ev
         self._interior_incoming.append(MatrixEntry(parent, term, value))
