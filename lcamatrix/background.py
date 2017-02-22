@@ -88,11 +88,12 @@ class TarjanStack(object):
         self._sccs = defaultdict(set)  # dict mapping lowest index (lowlink = SCC ID) to its scc peers
         self._scc_of = dict()  # dict mapping product flow to SCC ID (reverse mapping of _sccs)
 
-        self._component_cols_by_row = defaultdict(set)  # dict of scc_id to upstream dependents (columns with nz row)
-        self._component_rows_by_col = defaultdict(set)  # rows with nz column
+        self._component_cols_by_row = defaultdict(set)  # nonzero columns in given row (upstream dependents)
+        self._component_rows_by_col = defaultdict(set)  # nonzero rows in given column (downstream dependencies)
 
         self._background = None  # single scc_id representing largest scc
         self._downstream = set()  # sccs on which background depends
+        self._bg_index = dict()
 
     def check_stack(self, product_flow):
         """
@@ -131,7 +132,10 @@ class TarjanStack(object):
             if len(t) > ml:
                 ml = len(t)
                 ind = i
-        self._background = ind
+        if ml > 1:
+            self._background = ind
+            self._set_downstream()
+            self._generate_bg_index()
 
     def _set_downstream(self, upstream=None):
         """
@@ -140,12 +144,21 @@ class TarjanStack(object):
         :return:
         """
         if upstream is None:
+            if self._background is None:
+                return
             upstream = self._background
 
         for dep in self._component_rows_by_col[upstream]:
             if dep != upstream:  # skip self-dependencies
                 self._downstream.add(dep)
                 self._set_downstream(dep)
+
+    def _generate_bg_index(self):
+        if self._background is None:
+            self._bg_index = dict()
+        else:
+            bg = [b.index for b in self.background_flows()]  # list of indices to background nodes
+            self._bg_index = dict((ind, n) for n, ind in enumerate(bg))  # mapping of *pf* index to a-matrix index
 
     def add_to_graph(self, interiors):
         """
@@ -158,25 +171,77 @@ class TarjanStack(object):
             self._component_cols_by_row[row].add(col)
             self._component_rows_by_col[col].add(row)
         self._set_background()
-        self._set_downstream()
 
     @property
     def background(self):
         return self._background
+
+    @property
+    def ndim(self):
+        return len(self._bg_index)
+
+    def foreground(self, index):
+        """
+        returns a list of foreground SCCs that are downstream of the supplied scc ID (itself included)
+        This is a list of components necessary to build the foreground fragment tree
+        :param index:
+        :return: topologically-ordered, loop-detecting list of non-background SCC IDs
+        """
+        if self.is_background(index):
+            return []
+        queue = [index]
+        fg = []
+        while len(queue) > 0:
+            current = queue.pop(0)
+            if current not in fg:
+                queue.extend([k for k in self._component_rows_by_col[current] if not self.is_background(k)])
+                fg.append(current)
+        return fg
+
+    def foreground_flows(self, outputs=False):
+        """
+        Generator. Yields product flows in
+        :param outputs: [False] (bool) if True, only report strict outputs (nodes on which no other nodes depend)
+        :return:
+        """
+        for k in self._sccs.keys():
+            if k != self._background and k not in self._downstream:
+                if outputs:
+                    if len(self._component_cols_by_row[k]) == 0:
+                        yield k
+                else:
+                    yield k
 
     def background_flows(self):
         """
         Generator. Yields product flows in the db background or downstream.
         :return:
         """
+        if self._background is None:
+            return
         for i in self.scc(self._background):
             yield i
         for i in self._downstream:
             for j in self.scc(i):
                 yield j
 
+    def bg_dict(self, index):
+        return self._bg_index[index]
+
+    def is_background(self, index):
+        """
+        Tells whether a Product Flow index is background. Note: SCC IDs are indexes of the first product flow
+        encountered in a given SCC, or the only product flow for a singleton (i.e. acyclic foreground) SCC
+        :param index: product_flow.index
+        :return: bool
+        """
+        return index in self._bg_index
+
     def scc_id(self, pf):
         return self._scc_of[pf]
+
+    def sccs(self):
+        return self._sccs.keys()
 
     def scc(self, index):
         return self._sccs[index]
@@ -356,7 +421,8 @@ class BackgroundManager(object):
 
         self._interior_incoming = []  # hold interior exchanges before adding them to the component graph
 
-        self._interior = []  # entries in the sparse A matrix
+        self._interior = []  # entries in the sparse A matrix-- may not need to save these since they are encoded into A
+        self._foreground = []  # entries upstream of the background
         self._product_flows = dict()  # maps product_flow key to index
         self._pf_index = []  # maps index to product_flow
 
@@ -461,35 +527,39 @@ class BackgroundManager(object):
                 term = None
         return term
 
-    def _construct_b_matrix(self, bg_dict):
+    def _construct_b_matrix(self):
         """
-        bg_dict maps pf index to column index. Only applies to background + downstream processes.
+        b matrix only includes emissions from background + downstream processes.
         [foreground processes LCI will have to be computed the foreground way]
-        :param bg_dict:
         :return:
         """
         if self._b_matrix is not None:
             raise ValueError('B matrix already specified!')
-        num_bg = sp.array([[co.term.index, bg_dict[co.parent.index], co.value] for co in self._cutoff
-                           if co.parent.index in bg_dict])
-        self._b_matrix = csc_matrix((num_bg[:, 2], (num_bg[:, 0], num_bg[:, 1])))
-        self._cutoff = [co for co in self._cutoff if co.parent.index not in bg_dict]
+        num_bg = sp.array([[co.term.index, self.tstack.bg_dict(co.parent.index), co.value] for co in self._cutoff
+                           if self.tstack.is_background(co.parent.index)])
+        mdim = len(self._emissions)
+        self._b_matrix = csc_matrix((num_bg[:, 2], (num_bg[:, 0], num_bg[:, 1])), shape=(mdim, self.tstack.ndim))
+        self._cutoff = [co for co in self._cutoff if not self.tstack.is_background(co.parent.index)]
 
     def _construct_a_matrix(self):
-        bg = [b.index for b in self.tstack.background_flows()]  # list of indices to background nodes
-        bg_dict = dict((ind, n) for n, ind in enumerate(bg))  # mapping of pf index to a-matrix index / b-col index
-        num_bg = sp.array([[bg_dict[i.term.index], bg_dict[i.parent.index], i.value] for i in self._interior
-                           if i.parent.index in bg_dict])
-        self._a_matrix = csc_matrix((num_bg[:, 2], (num_bg[:, 0], num_bg[:, 1])))
-        self._construct_b_matrix(bg_dict)
+        ndim = self.tstack.ndim
+        num_bg = sp.array([[self.tstack.bg_dict(i.term.index), self.tstack.bg_dict(i.parent.index), i.value]
+                           for i in self._interior
+                           if self.tstack.is_background(i.parent.index)])
+        self._a_matrix = csc_matrix((num_bg[:, 2], (num_bg[:, 0], num_bg[:, 1])), shape=(ndim, ndim))
 
     def _update_component_graph(self):
         self.tstack.add_to_graph(self._interior_incoming)  # background should now be up to date
-        self._interior.extend(self._interior_incoming)
-        self._interior_incoming = []
+        while len(self._interior_incoming) > 0:
+            k = self._interior_incoming.pop()
+            if self.tstack.is_background(k.parent.index):
+                self._interior.append(k)
+            else:
+                self._foreground.append(k)
 
         if self._a_matrix is None and self.tstack.background is not None:
             self._construct_a_matrix()
+            self._construct_b_matrix()
 
     def add_all_ref_products(self, multi_term='first', default_allocation=None):
         for p in self.archive.processes():
