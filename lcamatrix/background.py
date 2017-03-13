@@ -290,7 +290,8 @@ class BackgroundManager(object):
         """
         if self._b_matrix is not None:
             raise ValueError('B matrix already specified!')
-        num_bg = sp.array([[co.term.index, self.tstack.bg_dict(co.parent.index), co.value] for co in self._bg_emission])
+        num_bg = sp.array([[co.emission.index, self.tstack.bg_dict(co.parent.index), co.value]
+                           for co in self._bg_emission])
         mdim = len(self._emissions)
         self._b_matrix = self._construct_csc(num_bg, mdim, self.tstack.ndim)
 
@@ -305,6 +306,8 @@ class BackgroundManager(object):
         make af, ad, bf
         :return:
         """
+        if self.tstack.pdim == 0:
+            return None, None, None
         af_exch = []
         ad_exch = []
         for fg in self._foreground:
@@ -345,7 +348,7 @@ class BackgroundManager(object):
             self._construct_a_matrix()
             self._construct_b_matrix()
 
-        self.make_foreground()
+        # self.make_foreground()
 
     def add_all_ref_products(self, multi_term='first', default_allocation=None):
         for p in self.archive.processes():
@@ -396,12 +399,14 @@ class BackgroundManager(object):
         rx = parent.process.find_reference(parent.flow)
         no_alloc = False
         if not parent.process.is_allocated(rx):
-            if default_allocation is not None:
-                parent.process.allocate_by_quantity(default_allocation)
-            else:
-                no_alloc = True
+            if len(parent.process.reference_entity) > 1:
+                if default_allocation is not None:
+                    parent.process.allocate_by_quantity(default_allocation)
+                else:
+                    no_alloc = True
 
         if no_alloc:
+            print('Cutting off at un-allocated multi-output process:\n%s' % parent.process)
             exchs = []
         else:
             exchs = [x for x in parent.process.exchanges()]

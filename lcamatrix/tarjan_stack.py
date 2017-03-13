@@ -18,6 +18,8 @@ class TarjanStack(object):
 
         self._background = None  # single scc_id representing largest scc
         self._downstream = set()  # sccs on which background depends
+
+        self._fg_processes = []  # ordered list of product flows
         self._fg_index = dict()  # maps product_flow.index to a* / b* column -- STATIC
         self._bg_index = dict()  # maps product_flow.index to af / ad/ bf column -- VOLATILE
 
@@ -109,7 +111,12 @@ class TarjanStack(object):
             for k in new_outputs:
                 fg_nodes.remove(k)  # remove new outputs from consideration
 
-        self._fg_index = dict((ind, n) for n, ind in enumerate(fg_ordering))
+        self._fg_processes = []
+        for k in fg_ordering:
+            for pf in self.scc(k):
+                self._fg_processes.append(pf.index)
+
+        self._fg_index = dict((ind, n) for n, ind in enumerate(self._fg_processes))
 
     def add_to_graph(self, interiors):
         """
@@ -156,17 +163,16 @@ class TarjanStack(object):
 
     def foreground_flows(self, outputs=False):
         """
-        Generator. Yields product flows in
+        Generator. Yields product flows in the volatile foreground
         :param outputs: [False] (bool) if True, only report strict outputs (nodes on which no other nodes depend)
         :return:
         """
-        for k in self._sccs.keys():
-            if k != self._background and k not in self._downstream:
-                if outputs:
-                    if len(self._component_cols_by_row[k]) > 0:
-                        continue
-                for pf in self.scc(k):
-                    yield pf
+        for pf in self._fg_processes:
+            if outputs:
+                k = self._scc_of[pf]
+                if len(self._component_cols_by_row[k]) > 0:
+                    return  # cut out early since fg_processes is ordered
+            yield pf
 
     def background_flows(self):
         """
