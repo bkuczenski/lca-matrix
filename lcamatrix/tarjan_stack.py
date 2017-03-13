@@ -10,7 +10,7 @@ class TarjanStack(object):
     def __init__(self):
         self._stack = []
         self._stack_hash = set()
-        self._sccs = defaultdict(set)  # dict mapping lowest index (lowlink = SCC ID) to its scc peers
+        self._sccs = defaultdict(set)  # dict mapping lowest index (lowlink = SCC ID) to the set of scc peers
         self._scc_of = dict()  # dict mapping product flow to SCC ID (reverse mapping of _sccs)
 
         self._component_cols_by_row = defaultdict(set)  # nonzero columns in given row (upstream dependents)
@@ -18,7 +18,8 @@ class TarjanStack(object):
 
         self._background = None  # single scc_id representing largest scc
         self._downstream = set()  # sccs on which background depends
-        self._bg_index = dict()
+        self._fg_index = dict()  # maps product_flow.index to a* / b* column -- STATIC
+        self._bg_index = dict()  # maps product_flow.index to af / ad/ bf column -- VOLATILE
 
     def check_stack(self, product_flow):
         """
@@ -82,8 +83,33 @@ class TarjanStack(object):
         if self._background is None:
             self._bg_index = dict()
         else:
-            bg = [b.index for b in self.background_flows()]  # list of indices to background nodes
+            bg = [b.index for b in self.background_flows()]  # list of ProductFlow.index values of background nodes
             self._bg_index = dict((ind, n) for n, ind in enumerate(bg))  # mapping of *pf* index to a-matrix index
+
+    def _generate_foreground_index(self):
+        """
+        Perform topological sort of fg nodes
+        :return:
+        """
+        fg_nodes = set()
+        fg_ordering = []
+        for k in self._sccs.keys():
+            if k != self._background and k not in self._downstream:
+                if len(self._component_cols_by_row[k]) == 0:  # no columns depend on row: fg outputs
+                    fg_ordering.append(k)
+                else:
+                    fg_nodes.add(k)
+
+        while len(fg_nodes) > 0:
+            new_outputs = set()
+            for k in fg_nodes:
+                if len([j for j in self._component_cols_by_row[k] if j not in fg_ordering]) == 0:  # all upstream is fg
+                    new_outputs.add(k)
+            fg_ordering.extend(list(new_outputs))  # add new outputs to ordering
+            for k in new_outputs:
+                fg_nodes.remove(k)  # remove new outputs from consideration
+
+        self._fg_index = dict((ind, n) for n, ind in enumerate(fg_ordering))
 
     def add_to_graph(self, interiors):
         """
@@ -96,6 +122,7 @@ class TarjanStack(object):
             self._component_cols_by_row[row].add(col)
             self._component_rows_by_col[col].add(row)
         self._set_background()
+        # self._generate_foreground_index()
 
     @property
     def background(self):
@@ -104,6 +131,10 @@ class TarjanStack(object):
     @property
     def ndim(self):
         return len(self._bg_index)
+
+    @property
+    def pdim(self):
+        return len(self._fg_index)
 
     def foreground(self, index):
         """
@@ -150,8 +181,27 @@ class TarjanStack(object):
             for j in self.scc(i):
                 yield j
 
-    def bg_dict(self, index):
-        return self._bg_index[index]
+    def bg_dict(self, pf_index):
+        """
+        Maps a ProductFlow.index to the row/column number in A* or column in B*
+        :param pf_index:
+        :return:
+        """
+        try:
+            return self._bg_index[pf_index]
+        except KeyError:
+            return None
+
+    def fg_dict(self, pf_index):
+        """
+        Maps a ProductFlow.index to the column number in Af or Ad or Bf
+        :param pf_index:
+        :return:
+        """
+        try:
+            return self._fg_index[pf_index]
+        except KeyError:
+            return None
 
     def is_background(self, index):
         """

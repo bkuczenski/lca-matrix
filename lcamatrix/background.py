@@ -16,14 +16,61 @@ from lcamatrix.tarjan_stack import TarjanStack
 from lcamatrix.product_flow import ProductFlow
 from lcamatrix.emission import Emission
 
-from collections import defaultdict, namedtuple
+from collections import defaultdict
 from lcatools.exchanges import comp_dir
 from lcatools.entities import LcProcess
 
 MAX_SAFE_RECURSION_LIMIT = 18000  # this should be validated using
 
 
-MatrixEntry = namedtuple("MatrixEntry", ('parent', 'term', 'value'))  # parent = column; term = row; value > 0 => input
+class MatrixEntry(object):
+    """
+    # Exchanges: parent = column; term = row;
+    Value is modified to encode exchange direction: outputs must be negated at creation, inputs entered directly
+    """
+    def __init__(self, parent, term, value):
+        assert isinstance(parent, ProductFlow)
+        assert isinstance(term, ProductFlow)
+        self._parent = parent
+        self._term = term
+        self._value = value
+
+    @property
+    def parent(self):
+        return self._parent
+
+    @property
+    def term(self):
+        return self._term
+
+    @property
+    def value(self):
+        return self._value
+
+
+class CutoffEntry(object):
+    """
+    # Cutoffs: parent = column; emission = row of B includes direction information; value is entered unmodified
+    """
+
+    def __init__(self, parent, emission, value):
+        assert isinstance(parent, ProductFlow)
+        assert isinstance(emission, Emission)
+        self._parent = parent
+        self._term = emission
+        self._value = value
+
+    @property
+    def parent(self):
+        return self._parent
+
+    @property
+    def emission(self):
+        return self._term
+
+    @property
+    def value(self):
+        return self._value
 
 
 DEFAULT_DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
@@ -99,9 +146,23 @@ class BackgroundManager(object):
         self._data_dir = data_dir  # save A / Bx in sparse form? Bx isn't sparse- A may be quicker than the json
         self._lowlinks = dict()  # dict mapping product_flow key to lowlink -- which is a key into TarjanStack.sccs
 
-        self.tstack = TarjanStack()
-        self._a_matrix = None
-        self._b_matrix = None
+        self.tstack = TarjanStack()  # ordering of sccs
+
+        # hold exchanges before updating component graph
+        self._interior_incoming = []  # terminated entries -> added to the component graph
+        self._cutoff_incoming = []  # entries with no termination -> emissions
+
+        # _interior_incoming entries get sorted into:
+        self._interior = []  # MatrixEntries whose parent (column) is background - A*
+        self._foreground = []  # MatrixEntries whose parent is upstream of the background - Af + Ad
+        self._bg_emission = []  # CutoffEntries whose parent is background - B*
+        self._cutoff = []  # CutoffEntries whose parent is foreground - Bf
+
+        self._product_flows = dict()  # maps product_flow.key to index-- being position in _pf_index
+        self._pf_index = []  # maps index to product_flow in order added
+
+        self._a_matrix = None  # includes only interior exchanges -- dependencies in _interior
+        self._b_matrix = None  # SciPy.csc_matrix for bg only
 
         self._terminations = defaultdict(list)
         self._index_archive()  # dict of reference flows to terminating processes.
@@ -109,14 +170,7 @@ class BackgroundManager(object):
         if self.required_recursion_limit > MAX_SAFE_RECURSION_LIMIT:
             raise EnvironmentError('This database may require too high a recursion limit-- time to learn lisp.')
 
-        self._interior_incoming = []  # hold interior exchanges before adding them to the component graph
 
-        self._interior = []  # entries in the sparse A matrix-- may not need to save these since they are encoded into A
-        self._foreground = []  # entries upstream of the background
-        self._product_flows = dict()  # maps product_flow key to index
-        self._pf_index = []  # maps index to product_flow
-
-        self._cutoff = []  # entries in the sparse B matrix
         self._emissions = dict()  # maps emission key to index
         self._ef_index = []  # maps index to emission
 
@@ -217,6 +271,17 @@ class BackgroundManager(object):
                 term = None
         return term
 
+    @staticmethod
+    def _construct_csc(nums, nrows, ncols):
+        """
+
+        :param nums:
+        :param nrows:
+        :param ncols:
+        :return:
+        """
+        return csc_matrix((nums[:, 2], (nums[:, 0], nums[:, 1])), shape=(nrows, ncols))
+
     def _construct_b_matrix(self):
         """
         b matrix only includes emissions from background + downstream processes.
@@ -225,21 +290,43 @@ class BackgroundManager(object):
         """
         if self._b_matrix is not None:
             raise ValueError('B matrix already specified!')
-        num_bg = sp.array([[co.term.index, self.tstack.bg_dict(co.parent.index), co.value] for co in self._cutoff
-                           if self.tstack.is_background(co.parent.index)])
+        num_bg = sp.array([[co.term.index, self.tstack.bg_dict(co.parent.index), co.value] for co in self._bg_emission])
         mdim = len(self._emissions)
-        self._b_matrix = csc_matrix((num_bg[:, 2], (num_bg[:, 0], num_bg[:, 1])), shape=(mdim, self.tstack.ndim))
-        self._cutoff = [co for co in self._cutoff if not self.tstack.is_background(co.parent.index)]
+        self._b_matrix = self._construct_csc(num_bg, mdim, self.tstack.ndim)
 
     def _construct_a_matrix(self):
         ndim = self.tstack.ndim
         num_bg = sp.array([[self.tstack.bg_dict(i.term.index), self.tstack.bg_dict(i.parent.index), i.value]
-                           for i in self._interior
-                           if self.tstack.is_background(i.parent.index)])
-        self._a_matrix = csc_matrix((num_bg[:, 2], (num_bg[:, 0], num_bg[:, 1])), shape=(ndim, ndim))
+                           for i in self._interior])
+        self._a_matrix = self._construct_csc(num_bg, ndim, ndim)
+
+    def make_foreground(self):
+        """
+        make af, ad, bf
+        :return:
+        """
+        af_exch = []
+        ad_exch = []
+        for fg in self._foreground:
+            if self.tstack.is_background(fg.term.index):
+                ad_exch.append(fg)
+            else:
+                af_exch.append(fg)
+        num_af = sp.array([[self.tstack.fg_dict(i.term.index), self.tstack.fg_dict(i.parent.index), i.value]
+                           for i in af_exch])
+        num_ad = sp.array([[self.tstack.fg_dict(i.term.index), self.tstack.fg_dict(i.parent.index), i.value]
+                           for i in ad_exch])
+        num_bf = sp.array([[co.term.index, self.tstack.fg_dict(co.parent.index), co.value] for co in self._cutoff])
+        pdim = self.tstack.pdim
+        ndim = self.tstack.ndim
+        mdim = len(self._emissions)
+        _af = self._construct_csc(num_af, pdim, pdim)
+        _ad = self._construct_csc(num_ad, ndim, pdim)
+        _bf = self._construct_csc(num_bf, mdim, pdim)
+        return _af, _ad, _bf
 
     def _update_component_graph(self):
-        self.tstack.add_to_graph(self._interior_incoming)  # background should now be up to date
+        self.tstack.add_to_graph(self._interior_incoming)  # background should be brought up to date
         while len(self._interior_incoming) > 0:
             k = self._interior_incoming.pop()
             if self.tstack.is_background(k.parent.index):
@@ -247,9 +334,18 @@ class BackgroundManager(object):
             else:
                 self._foreground.append(k)
 
+        while len(self._cutoff_incoming) > 0:
+            k = self._cutoff_incoming.pop()
+            if self.tstack.is_background(k.parent.index):
+                self._bg_emission.append(k)
+            else:
+                self._cutoff.append(k)
+
         if self._a_matrix is None and self.tstack.background is not None:
             self._construct_a_matrix()
             self._construct_b_matrix()
+
+        self.make_foreground()
 
     def add_all_ref_products(self, multi_term='first', default_allocation=None):
         for p in self.archive.processes():
@@ -354,7 +450,7 @@ class BackgroundManager(object):
         :param val: raw exchange value
         """
         value = val / parent.inbound_ev
-        self._cutoff.append(MatrixEntry(parent, emission, value))
+        self._cutoff_incoming.append(CutoffEntry(parent, emission, value))
 
     def add_interior(self, parent, term, val):
         """
