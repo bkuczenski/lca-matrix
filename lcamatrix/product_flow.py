@@ -9,6 +9,12 @@ class ProductFlow(object):
         and thus represents a particular process generating / consuming a particular flow.  A ProductFlow entry is
         akin to a fragment termination.
 
+        inbound_ev is the exchange value of the reference flow, which is divided into the exchange values of the child
+        flows.  It has the convention Output = positive, so if the reference exchange is an input, the inbound_ev is
+        negated.  Similarly, the exchange values of matrix entries made with ProductFlow parents need to be implemented
+        as Input = positive, with outputs negated.  This is to satisfy the make-use equation e.g. V - U' in Suh 2010
+        or whichever it was.
+
         :param flow: the LcFlow entity that represents the commodity (term_flow in the fragment sense)
         :param process: the termination of the parent node's exchange (term_node). None is equivalent to a
         cutoff flow or elementary flow (distinction is left to a compartment manager).  If non-null, the process must
@@ -86,4 +92,4 @@ class ProductFlow(object):
         return self._inbound_ev
 
     def __str__(self):
-        return '%s==%s' % (self._process, self._flow)
+        return '%s:==%s' % (self._process, self._flow)

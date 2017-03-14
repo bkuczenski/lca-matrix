@@ -149,7 +149,7 @@ class TarjanStack(object):
         computes a list of foreground SCCs that are downstream of the supplied product flow.
         Then converts the SCCs into an ordered list of product flows that make up the columns of the foreground.
         :param pf_index: a product flow OR product flow index.
-        :return: topologically-ordered, loop-detecting list of non-background product flows
+        :return: not yet topologically-ordered, but loop-detecting list of non-background product flows
         """
         if isinstance(pf_index, ProductFlow):
             index = self.scc_id(pf_index)

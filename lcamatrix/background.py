@@ -176,7 +176,6 @@ class BackgroundManager(object):
         if self.required_recursion_limit > MAX_SAFE_RECURSION_LIMIT:
             raise EnvironmentError('This database may require too high a recursion limit-- time to learn lisp.')
 
-
         self._emissions = dict()  # maps emission key to index
         self._ef_index = []  # maps index to emission
 
@@ -345,7 +344,7 @@ class BackgroundManager(object):
         else:
             pdim = len(product_flows)
             bf_exch = []
-            _fg_dict = dict((ind, n) for n, ind in enumerate(product_flows))
+            _fg_dict = dict((pf.index, n) for n, pf in enumerate(product_flows))
 
             def fg_dict(x):
                 return _fg_dict[x]
