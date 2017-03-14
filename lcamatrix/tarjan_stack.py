@@ -105,7 +105,8 @@ class TarjanStack(object):
         while len(fg_nodes) > 0:
             new_outputs = set()
             for k in fg_nodes:
-                if len([j for j in self._component_cols_by_row[k] if j not in fg_ordering]) == 0:  # all upstream is fg
+                depends = [j for j in self._component_cols_by_row[k] if j not in fg_ordering and j != k]
+                if len(depends) == 0:  # all upstream is fg
                     new_outputs.add(k)
             fg_ordering.extend(list(new_outputs))  # add new outputs to ordering
             for k in new_outputs:
@@ -114,9 +115,9 @@ class TarjanStack(object):
         self._fg_processes = []
         for k in fg_ordering:
             for pf in self.scc(k):
-                self._fg_processes.append(pf.index)
+                self._fg_processes.append(pf)
 
-        self._fg_index = dict((ind, n) for n, ind in enumerate(self._fg_processes))
+        self._fg_index = dict((pf.index, n) for n, pf in enumerate(self._fg_processes))
 
     def add_to_graph(self, interiors):
         """
@@ -129,7 +130,7 @@ class TarjanStack(object):
             self._component_cols_by_row[row].add(col)
             self._component_rows_by_col[col].add(row)
         self._set_background()
-        # self._generate_foreground_index()
+        self._generate_foreground_index()
 
     @property
     def background(self):
@@ -143,23 +144,32 @@ class TarjanStack(object):
     def pdim(self):
         return len(self._fg_index)
 
-    def foreground(self, index):
+    def foreground(self, pf_index):
         """
-        returns a list of foreground SCCs that are downstream of the supplied scc ID (itself included)
-        This is a list of components necessary to build the foreground fragment tree
-        :param index:
-        :return: topologically-ordered, loop-detecting list of non-background SCC IDs
+        computes a list of foreground SCCs that are downstream of the supplied product flow.
+        Then converts the SCCs into an ordered list of product flows that make up the columns of the foreground.
+        :param pf_index: a product flow OR product flow index.
+        :return: topologically-ordered, loop-detecting list of non-background product flows
         """
-        if self.is_background(index):
-            return []
+        if isinstance(pf_index, ProductFlow):
+            index = self.scc_id(pf_index)
+            if self.is_background(index):
+                return []
+        else:
+            index = self.fg_dict(pf_index)
+            if index is None:
+                return []
         queue = [index]
         fg = []
+        fg_pf = []
         while len(queue) > 0:
             current = queue.pop(0)
             if current not in fg:
                 queue.extend([k for k in self._component_rows_by_col[current] if not self.is_background(k)])
                 fg.append(current)
-        return fg
+                for k in self.scc(current):
+                    fg_pf.append(k)
+        return fg_pf
 
     def foreground_flows(self, outputs=False):
         """

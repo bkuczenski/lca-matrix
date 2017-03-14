@@ -23,54 +23,60 @@ from lcatools.entities import LcProcess
 MAX_SAFE_RECURSION_LIMIT = 18000  # this should be validated using
 
 
-class MatrixEntry(object):
+class RepeatAdjustment(Exception):
+    pass
+
+
+class MatrixProto(object):
     """
     # Exchanges: parent = column; term = row;
     Value is modified to encode exchange direction: outputs must be negated at creation, inputs entered directly
     """
-    def __init__(self, parent, term, value):
+    def __init__(self, parent, value):
         assert isinstance(parent, ProductFlow)
-        assert isinstance(term, ProductFlow)
         self._parent = parent
-        self._term = term
         self._value = value
+        self._adjusted = False
 
     @property
     def parent(self):
         return self._parent
+
+    @property
+    def value(self):
+        return self._value
+
+    def adjust_val(self):
+        if self._adjusted is False:
+            self._value /= self.parent.inbound_ev
+            self._adjusted = True
+        else:
+            raise RepeatAdjustment
+
+
+class MatrixEntry(MatrixProto):
+    def __init__(self, parent, term, value):
+        assert isinstance(term, ProductFlow)
+        super(MatrixEntry, self).__init__(parent, value)
+        self._term = term
 
     @property
     def term(self):
         return self._term
 
-    @property
-    def value(self):
-        return self._value
 
-
-class CutoffEntry(object):
+class CutoffEntry(MatrixProto):
     """
     # Cutoffs: parent = column; emission = row of B includes direction information; value is entered unmodified
     """
-
     def __init__(self, parent, emission, value):
-        assert isinstance(parent, ProductFlow)
         assert isinstance(emission, Emission)
-        self._parent = parent
+        super(CutoffEntry, self).__init__(parent, value)
         self._term = emission
-        self._value = value
-
-    @property
-    def parent(self):
-        return self._parent
 
     @property
     def emission(self):
         return self._term
-
-    @property
-    def value(self):
-        return self._value
 
 
 DEFAULT_DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
@@ -280,7 +286,15 @@ class BackgroundManager(object):
         :param ncols:
         :return:
         """
-        return csc_matrix((nums[:, 2], (nums[:, 0], nums[:, 1])), shape=(nrows, ncols))
+        if len(nums) == 0:
+            return csc_matrix((nrows, ncols))
+        else:
+            try:
+                return csc_matrix((nums[:, 2], (nums[:, 0], nums[:, 1])), shape=(nrows, ncols))
+            except IndexError:
+                print('nrows: %s  ncols: %s' % (nrows, ncols))
+                print(nums)
+                raise
 
     def _construct_b_matrix(self):
         """
@@ -301,26 +315,54 @@ class BackgroundManager(object):
                            for i in self._interior])
         self._a_matrix = self._construct_csc(num_bg, ndim, ndim)
 
-    def make_foreground(self):
+    def product_flows(self):
+        for k in self.tstack.foreground_flows(outputs=True):
+            yield k
+
+    def make_foreground(self, product_flows=None):
         """
-        make af, ad, bf
-        :return:
+        make af, ad, bf for a given list of product flows, or entire if input list is omitted.
+        :param product_flows: a list of columns to include in the foreground.  Should be the output of
+        tstack.foreground(pf) in order to be complete.
+        :return: csc
         """
-        if self.tstack.pdim == 0:
-            return None, None, None
         af_exch = []
         ad_exch = []
-        for fg in self._foreground:
-            if self.tstack.is_background(fg.term.index):
-                ad_exch.append(fg)
-            else:
-                af_exch.append(fg)
-        num_af = sp.array([[self.tstack.fg_dict(i.term.index), self.tstack.fg_dict(i.parent.index), i.value]
-                           for i in af_exch])
-        num_ad = sp.array([[self.tstack.fg_dict(i.term.index), self.tstack.fg_dict(i.parent.index), i.value]
-                           for i in ad_exch])
-        num_bf = sp.array([[co.term.index, self.tstack.fg_dict(co.parent.index), co.value] for co in self._cutoff])
-        pdim = self.tstack.pdim
+        if product_flows is None:
+            pdim = self.tstack.pdim
+
+            def fg_dict(x):
+                return self.tstack.fg_dict(x)
+
+            bf_exch = self._cutoff
+            if self.tstack.pdim == 0:
+                return None, None, None
+            for fg in self._foreground:
+                if self.tstack.is_background(fg.term.index):
+                    ad_exch.append(fg)
+                else:
+                    af_exch.append(fg)
+        else:
+            pdim = len(product_flows)
+            bf_exch = []
+            _fg_dict = dict((ind, n) for n, ind in enumerate(product_flows))
+
+            def fg_dict(x):
+                return _fg_dict[x]
+
+            for fg in self._foreground:
+                if fg.parent.index in product_flows:
+                    if self.tstack.is_background(fg.term.index):
+                        ad_exch.append(fg)
+                    else:
+                        af_exch.append(fg)
+            for co in self._cutoff:
+                if co.parent.index in product_flows:
+                    bf_exch.append(co)
+
+        num_af = sp.array([[fg_dict(i.term.index), fg_dict(i.parent.index), i.value] for i in af_exch])
+        num_ad = sp.array([[self.tstack.bg_dict(i.term.index), fg_dict(i.parent.index), i.value] for i in ad_exch])
+        num_bf = sp.array([[co.emission.index, fg_dict(co.parent.index), co.value] for co in bf_exch])
         ndim = self.tstack.ndim
         mdim = len(self._emissions)
         _af = self._construct_csc(num_af, pdim, pdim)
@@ -332,6 +374,7 @@ class BackgroundManager(object):
         self.tstack.add_to_graph(self._interior_incoming)  # background should be brought up to date
         while len(self._interior_incoming) > 0:
             k = self._interior_incoming.pop()
+            k.adjust_val()
             if self.tstack.is_background(k.parent.index):
                 self._interior.append(k)
             else:
@@ -339,6 +382,7 @@ class BackgroundManager(object):
 
         while len(self._cutoff_incoming) > 0:
             k = self._cutoff_incoming.pop()
+            k.adjust_val()
             if self.tstack.is_background(k.parent.index):
                 self._bg_emission.append(k)
             else:
@@ -454,8 +498,7 @@ class BackgroundManager(object):
         :param emission: emission - B matrix row
         :param val: raw exchange value
         """
-        value = val / parent.inbound_ev
-        self._cutoff_incoming.append(CutoffEntry(parent, emission, value))
+        self._cutoff_incoming.append(CutoffEntry(parent, emission, val))
 
     def add_interior(self, parent, term, val):
         """
@@ -467,5 +510,8 @@ class BackgroundManager(object):
         :param val: raw (direction-adjusted) exchange value
         :return:
         """
-        value = val / parent.inbound_ev
-        self._interior_incoming.append(MatrixEntry(parent, term, value))
+        if parent is term:
+            print('self-dependency detected! %s' % parent.process)
+            parent.adjust_ev(val)
+        else:
+            self._interior_incoming.append(MatrixEntry(parent, term, val))

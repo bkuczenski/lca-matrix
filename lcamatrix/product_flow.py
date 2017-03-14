@@ -51,6 +51,16 @@ class ProductFlow(object):
     def __hash__(self):
         return hash(self._hash)
 
+    def adjust_ev(self, value):
+        """
+        Compensate recorded inbound exchange value if the process is found to depend on its own reference flow.
+        Assumption is that the flow is already sign-corrected (i.e. inbound_ev is positive-output, adjustment value
+        is positive-input, so new inbound_ev is difference
+        :param value:
+        :return:
+        """
+        self._inbound_ev -= value
+
     @property
     def index(self):
         return self._index
