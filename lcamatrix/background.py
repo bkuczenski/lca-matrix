@@ -8,6 +8,7 @@ Validate recursion depth on a given system using PYTHONROOT/Tools/scripts/find_r
 """
 import os
 import sys  # for recursion limit
+import re  # for product_flows search
 
 import scipy as sp
 from scipy.sparse import csc_matrix  # , csr_matrix
@@ -183,6 +184,14 @@ class BackgroundManager(object):
     def required_recursion_limit(self):
         return self._rec_limit
 
+    @property
+    def mdim(self):
+        return len(self._emissions)
+
+    @property
+    def emissions(self):
+        return self._ef_index
+
     def index(self, product_flow):
         return self._product_flows[product_flow.key]
 
@@ -305,8 +314,7 @@ class BackgroundManager(object):
             raise ValueError('B matrix already specified!')
         num_bg = sp.array([[co.emission.index, self.tstack.bg_dict(co.parent.index), co.value]
                            for co in self._bg_emission])
-        mdim = len(self._emissions)
-        self._b_matrix = self._construct_csc(num_bg, mdim, self.tstack.ndim)
+        self._b_matrix = self._construct_csc(num_bg, self.mdim, self.tstack.ndim)
 
     def _construct_a_matrix(self):
         ndim = self.tstack.ndim
@@ -314,19 +322,36 @@ class BackgroundManager(object):
                            for i in self._interior])
         self._a_matrix = self._construct_csc(num_bg, ndim, ndim)
 
-    def product_flows(self):
+    def product_flows(self, search=None):
         for k in self.tstack.foreground_flows(outputs=True):
-            yield k
+            if search is None:
+                yield k
+            else:
+                if bool(re.search(search, str(k), flags=re.IGNORECASE)):
+                    yield k
+
+    def make_background(self, product_flow):
+        """
+        Constructs sparse ad representing background product flow
+        :param product_flow:
+        :return: ad, bf where ad has one nonzero entry (corresponding to product flow = 1.0) and bf is all zeros
+        """
+        num_ad = sp.array([[0, self.tstack.bg_dict(product_flow.index), 1.0]])
+        _ad = self._construct_csc(num_ad, self.tstack.ndim, 1)
+        _bf = self._construct_csc([], self.mdim, 1)
+        return _ad, _bf
 
     def make_foreground(self, product_flows=None):
         """
         make af, ad, bf for a given list of product flows, or entire if input list is omitted.
-        :param product_flows: a list of columns to include in the foreground.  Should be the output of
+        :param product_flows: a list of ProductFlows to include as foreground columns.  Should be the output of
         tstack.foreground(pf) in order to be complete.
-        :return: csc
+        :return: af, ad, bf sparse csc_matrixes
+        TODO: also return a matrix of cutoff flows
         """
         af_exch = []
         ad_exch = []
+        fg_cutoff = []
         if product_flows is None:
             pdim = self.tstack.pdim
 
@@ -350,23 +375,28 @@ class BackgroundManager(object):
                 return _fg_dict[x]
 
             for fg in self._foreground:
-                if fg.parent.index in product_flows:
+                if fg.parent.index in _fg_dict:
                     if self.tstack.is_background(fg.term.index):
                         ad_exch.append(fg)
-                    else:
+                    elif fg.term.index in _fg_dict:
                         af_exch.append(fg)
+                    else:
+                        fg_cutoff.append(fg)
             for co in self._cutoff:
-                if co.parent.index in product_flows:
+                if co.parent.index in _fg_dict:
                     bf_exch.append(co)
 
         num_af = sp.array([[fg_dict(i.term.index), fg_dict(i.parent.index), i.value] for i in af_exch])
         num_ad = sp.array([[self.tstack.bg_dict(i.term.index), fg_dict(i.parent.index), i.value] for i in ad_exch])
         num_bf = sp.array([[co.emission.index, fg_dict(co.parent.index), co.value] for co in bf_exch])
         ndim = self.tstack.ndim
-        mdim = len(self._emissions)
         _af = self._construct_csc(num_af, pdim, pdim)
         _ad = self._construct_csc(num_ad, ndim, pdim)
-        _bf = self._construct_csc(num_bf, mdim, pdim)
+        _bf = self._construct_csc(num_bf, self.mdim, pdim)
+        if len(fg_cutoff) > 0:
+            for co in fg_cutoff:
+                # TODO - make these into a matrix too
+                print('Losing FG Cutoff %s' % co)
         return _af, _ad, _bf
 
     def _update_component_graph(self):
@@ -449,7 +479,7 @@ class BackgroundManager(object):
                     no_alloc = True
 
         if no_alloc:
-            print('Cutting off at un-allocated multi-output process:\n%s' % parent.process)
+            print('Cutting off at un-allocated multi-output process:\n %s\n %s' % (parent.process, rx))
             exchs = []
         else:
             exchs = [x for x in parent.process.exchanges()]

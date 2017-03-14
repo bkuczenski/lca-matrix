@@ -219,14 +219,16 @@ class TarjanStack(object):
         except KeyError:
             return None
 
-    def is_background(self, index):
+    def is_background(self, pf):
         """
-        Tells whether a Product Flow index is background. Note: SCC IDs are indexes of the first product flow
+        Tells whether a Product Flow OR index is background. Note: SCC IDs are indexes of the first product flow
         encountered in a given SCC, or the only product flow for a singleton (i.e. acyclic foreground) SCC
-        :param index: product_flow.index
+        :param pf: product_flow OR product_flow.index
         :return: bool
         """
-        return index in self._bg_index
+        if isinstance(pf, ProductFlow):
+            return pf.index in self._bg_index
+        return pf in self._bg_index
 
     def scc_id(self, pf):
         return self._scc_of[pf]
