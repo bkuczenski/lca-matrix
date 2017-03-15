@@ -25,6 +25,7 @@ class ForegroundFragment(object):
         :param product_flow: a ProductFlow known to the background
         """
         self._bg = bg
+        self._pf = product_flow
 
         if bg.tstack.is_background(product_flow):
             self._foreground = None
@@ -96,14 +97,15 @@ class ForegroundFragment(object):
 
     def _table_start(self, aggregate):
         # begin table
-        table = '\\scriptsize\\sffamily\n\\begin{tabularx}{\\textwidth}{|X|%s|' % ('c' * self.pdim)
+        table = tex_sanitize('{\small %s, from %s}\n' % (self._pf.flow, self._pf.process))
+        table += '\n{\\scriptsize\\sffamily\n\\begin{tabularx}{\\textwidth}{|X|%s|' % ('c' * self.pdim)
         if aggregate:
             table += 'c|'
         table += '}\n\\hline\n'
         return table
 
     def _table_end(self):
-        return '\\end{tabularx}\n'
+        return '\\end{tabularx}\n}\n'
 
     def _table_header(self, title, aggregate=None):
         table = title
@@ -132,7 +134,7 @@ class ForegroundFragment(object):
         if aggregate:
             xtilde = self.x_tilde()
         for row, fg in enumerate(self._foreground):
-            table += '(%d) %s [%s]' % (row, fg.flow['Name'], fg.process['SpatialScope'])
+            table += tex_sanitize('(%d) %s [%s]' % (row, fg.flow['Name'], fg.process['SpatialScope']))
             for i, val in self.Af.loc[fg.process].iteritems():
                 if i == row:
                     table += ' & \\refbox '
