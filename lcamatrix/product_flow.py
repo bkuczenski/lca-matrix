@@ -93,3 +93,6 @@ class ProductFlow(object):
 
     def __str__(self):
         return '%s:==%s' % (self._process, self._flow)
+
+    def table_label(self):
+        return '%s [%s]' % (self._flow['Name'], self._process['SpatialScope'])

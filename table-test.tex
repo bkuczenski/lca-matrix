@@ -1,0 +1,12 @@
+\documentclass[12pt,letterpaper]{article}
+\input{formatting}
+\usepackage{tabularx}
+\input{psstyle}
+\newpsstyle{refplot}{framearc=0.1,linestyle=dashed,fillstyle=none,linecolor=gray, dash=3.3pt 2pt}
+\def\refbox{\psframebox[style=refplot,framesep=0pt]{\rule{0pt}{4pt}\rule{4pt}{0pt}}}
+\def\dependency{\psframebox[framesep=0pt]{\rule{2pt}{2pt}}}
+
+\begin{document}
+
+\input{table-output}
+\end{document}
