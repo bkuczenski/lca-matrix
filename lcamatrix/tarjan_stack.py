@@ -19,7 +19,7 @@ class TarjanStack(object):
         self._background = None  # single scc_id representing largest scc
         self._downstream = set()  # sccs on which background depends
 
-        self._fg_processes = []  # ordered list of product flows
+        self._fg_processes = []  # ordered list of foreground nodes
         self._fg_index = dict()  # maps product_flow.index to a* / b* column -- STATIC
         self._bg_index = dict()  # maps product_flow.index to af / ad/ bf column -- VOLATILE
 
@@ -90,11 +90,12 @@ class TarjanStack(object):
 
     def _generate_foreground_index(self):
         """
-        Perform topological sort of fg nodes
+        Perform topological sort of fg nodes. Store the results of the sort by node
         :return:
         """
         fg_nodes = set()
         fg_ordering = []
+        self._fg_processes = []
         for k in self._sccs.keys():
             if k != self._background and k not in self._downstream:
                 if len(self._component_cols_by_row[k]) == 0:  # no columns depend on row: fg outputs
@@ -112,7 +113,6 @@ class TarjanStack(object):
             for k in new_outputs:
                 fg_nodes.remove(k)  # remove new outputs from consideration
 
-        self._fg_processes = []
         for k in fg_ordering:
             for pf in self.scc(k):
                 self._fg_processes.append(pf)
@@ -144,6 +144,22 @@ class TarjanStack(object):
     def pdim(self):
         return len(self._fg_index)
 
+    def _foreground_components(self, index):
+        """
+        Returns a list of foreground SCCs that are downstream of the named index (inclusive). Sorts the list by
+        order in _fg_index.
+        :param index:
+        :return:
+        """
+        queue = [index]
+        fg = []
+        while len(queue) > 0:
+            current = queue.pop(0)
+            if current not in fg:
+                queue.extend([k for k in self._component_rows_by_col[current] if not self.is_background(k)])
+                fg.append(current)
+        return fg
+
     def foreground(self, pf_index):
         """
         computes a list of foreground SCCs that are downstream of the supplied product flow.
@@ -159,17 +175,12 @@ class TarjanStack(object):
             index = self.fg_dict(pf_index)
             if index is None:
                 return []
-        queue = [index]
-        fg = []
+        fg = self._foreground_components(index)
         fg_pf = []
-        while len(queue) > 0:
-            current = queue.pop(0)
-            if current not in fg:
-                queue.extend([k for k in self._component_rows_by_col[current] if not self.is_background(k)])
-                fg.append(current)
-                for k in self.scc(current):
+        for c in fg:
+            for k in self.scc(c):
                     fg_pf.append(k)
-        return fg_pf
+        return sorted(fg_pf, key=lambda x: self._fg_index[x.index])
 
     def foreground_flows(self, outputs=False):
         """
@@ -207,6 +218,14 @@ class TarjanStack(object):
             return self._bg_index[pf_index]
         except KeyError:
             return None
+
+    def fg_node(self, fg_index):
+        """
+        Returns a ProductFlow corresponding to the supplied input column
+        :param fg_index:
+        :return:
+        """
+        return self._fg_processes[fg_index]
 
     def fg_dict(self, pf_index):
         """
