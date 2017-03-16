@@ -38,6 +38,9 @@ class ForegroundFragment(object):
         print(' Ad: %dx%d, %d nonzero' % (self.ndim, self.pdim, self._ad.nnz))
         print(' Bf: %dx%d, %d nonzero' % (self.mdim, self.pdim, self._bf.nnz))
 
+    def __len__(self):
+        return len(self._foreground)
+
     @property
     def pdim(self):
         return len(self._foreground)
@@ -52,7 +55,7 @@ class ForegroundFragment(object):
 
     @property
     def Af(self):
-        return pd.DataFrame(self._af.todense(), index=[k.process for k in self._foreground])
+        return pd.DataFrame(self._af.todense(), index=[k for k in self._foreground])
 
     @property
     def Ad(self):
@@ -98,7 +101,7 @@ class ForegroundFragment(object):
     def _table_start(self, aggregate):
         # begin table
         table = tex_sanitize('{\small %s, from %s}\n' % (self._pf.flow, self._pf.process))
-        table += '\n{\\scriptsize\\sffamily\n\\begin{tabularx}{\\textwidth}{|X|%s|' % ('c' * self.pdim)
+        table += '\n{\\scriptsize\\sffamily\n\\begin{tabularx}{\\textwidth}{|X|%s|' % ('c@{~}' * self.pdim)
         if aggregate:
             table += 'c|'
         table += '}\n\\hline\n'
@@ -108,7 +111,13 @@ class ForegroundFragment(object):
         return '\\end{tabularx}\n}\n'
 
     def _table_header(self, title, aggregate=None):
-        table = title
+        """
+        Add a strut for good measure.
+        :param title:
+        :param aggregate:
+        :return:
+        """
+        table = title + ' \\rule[-3pt]{0pt}{12pt}'
         for i in range(self.pdim):
             table += ' & %d' % i
         if aggregate is not None:
@@ -127,7 +136,7 @@ class ForegroundFragment(object):
     def _af_table(self, aggregate):
         # foreground heading
         if aggregate:
-            agg_string = '$\\tilde{x}$'
+            agg_string = ''
         else:
             agg_string = None
         table = self._table_header('(node) Foreground flow', aggregate=agg_string)
@@ -135,18 +144,28 @@ class ForegroundFragment(object):
             xtilde = self.x_tilde()
         for row, fg in enumerate(self._foreground):
             table += tex_sanitize('(%d) %s [%s]' % (row, fg.flow['Name'], fg.process['SpatialScope']))
-            for i, val in self.Af.loc[fg.process].iteritems():
+            for i, val in self.Af.loc[fg].iteritems():
                 if i == row:
                     table += ' & \\refbox '
                 elif val != 0:
-                    table += ' & %5.3g' % val
+                    table += ' & %4.3g' % val
                 else:
                     table += ' & '
             if aggregate:
-                table += '& %5.3g' % xtilde[row]
+                table += '& '
             table += TAB_LF
         table += '\\hline\n'
 
+        return table
+
+    def _x_tilde_table(self):
+        xtilde = self.x_tilde()
+        table = 'Foreground Node Weights $\\tilde{x}$'
+        for rows in xtilde:
+            table += ' & %4.3g' % rows
+        table += '& '
+        table += TAB_LF
+        table += '\\hline\n'
         return table
 
     def _do_dep_table(self, dataframe, agg, max_rows):
@@ -176,7 +195,7 @@ class ForegroundFragment(object):
         else:
             agg = None
             agg_string = None
-        table = self._table_header('Background Dependency', aggregate=agg_string)
+        table = self._table_header('Background Dependencies', aggregate=agg_string)
         table += self._do_dep_table(self.show_Ad(), agg, max_rows)
 
         return table
@@ -196,6 +215,8 @@ class ForegroundFragment(object):
     def foreground_table(self, ad_rows=40, bf_rows=20, aggregate=False):
         table = self._table_start(aggregate)
         table += self._af_table(aggregate)
+        if aggregate:
+            table += self._x_tilde_table()
         table += self._ad_table(aggregate, ad_rows)
         table += self._bf_table(aggregate, bf_rows)
         table += self._table_end()
