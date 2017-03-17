@@ -10,15 +10,16 @@ import os
 import sys  # for recursion limit
 import re  # for product_flows search
 
+import numpy as np
 import scipy as sp
-from scipy.sparse import csc_matrix  # , csr_matrix
+from scipy.sparse import csc_matrix, csr_matrix
 
 from lcamatrix.tarjan_stack import TarjanStack
 from lcamatrix.product_flow import ProductFlow
 from lcamatrix.emission import Emission
 
 from collections import defaultdict
-from lcatools.exchanges import comp_dir
+from lcatools.exchanges import ExchangeValue, comp_dir
 from lcatools.entities import LcProcess
 
 MAX_SAFE_RECURSION_LIMIT = 18000  # this should be validated using
@@ -295,14 +296,69 @@ class BackgroundManager(object):
         :return:
         """
         if len(nums) == 0:
-            return csc_matrix((nrows, ncols))
+            return csr_matrix((nrows, ncols))
         else:
             try:
-                return csc_matrix((nums[:, 2], (nums[:, 0], nums[:, 1])), shape=(nrows, ncols))
+                return csr_matrix((nums[:, 2], (nums[:, 0], nums[:, 1])), shape=(nrows, ncols))
             except IndexError:
                 print('nrows: %s  ncols: %s' % (nrows, ncols))
                 print(nums)
                 raise
+
+    def compute_lci(self, product_flow, **kwargs):
+        if self.tstack.is_background(product_flow):
+            ad, bf_tilde = self.make_background(product_flow)
+            x, bx = self._compute_bg_lci(ad, **kwargs)
+        else:
+            af, ad, bf = self.make_foreground(self.tstack.foreground(product_flow))
+            x_tilde = np.linalg.inv(np.eye(af.shape[0]) - af.todense())[:, 0]
+            ad_tilde = ad * x_tilde
+            x, bx = self._compute_bg_lci(ad_tilde, **kwargs)
+            bf_tilde = csc_matrix(bf * x_tilde)
+        return x, bx, bf_tilde
+
+    def lci(self, product_flow, **kwargs):
+        """
+        Wrapper for compute_lci, returns exchanges with flows (and characterizations) drawn from self.archive
+        :param product_flow: we need some way to figure out which process the exchanges belong to, so for now we
+        ask the user
+        :param bf:
+        :return: list of exchanges.
+        """
+        x, bx, bf_tilde = self.compute_lci(product_flow, **kwargs)
+        b = bx + bf_tilde
+        exchanges = []
+        for i, em in enumerate(self._ef_index):
+            if b[i, 0] != 0:
+                flow = self.archive[em.key[0]]
+                exchanges.append(ExchangeValue(product_flow.process, flow, em.direction, value=b[i, 0]))
+        return exchanges
+
+    def _compute_bg_lci(self, ad, threshold=1e-8, count=100):
+        """
+        Computes background LCI via iterative matrix multiplication.
+        :param ad: a vector of background activity levels
+        :param threshold: [1e-8] size of the increment (1-norm) relative to the total LCI to finish early
+        :param count: [100] maximum number of iterations to perform
+        :return:
+        """
+        x = csr_matrix(ad)  # tested this with ecoinvent: convert to sparse: 280 ms; keep full: 4.5 sec
+        total = self._construct_csc([], *x.shape)
+        mycount = 0
+        sumtotal = 0.0
+
+        while mycount < count:
+            total += x
+            x = self._a_matrix.dot(x)
+            inc = sum(abs(x).data)
+            sumtotal += inc
+            if inc / sumtotal < threshold:
+                break
+            mycount += 1
+        print('completed %d iterations' % mycount)
+
+        b = self._b_matrix * total
+        return total, b
 
     def _construct_b_matrix(self):
         """
@@ -322,8 +378,16 @@ class BackgroundManager(object):
                            for i in self._interior])
         self._a_matrix = self._construct_csc(num_bg, ndim, ndim)
 
-    def product_flows(self, search=None):
-        for k in self.tstack.foreground_flows(outputs=True):
+    def product_flows(self, search=None, outputs=True):
+        for k in self.tstack.foreground_flows(outputs=outputs):
+            if search is None:
+                yield k
+            else:
+                if bool(re.search(search, str(k), flags=re.IGNORECASE)):
+                    yield k
+
+    def background_flows(self, search=None):
+        for k in self.tstack.background_flows():
             if search is None:
                 yield k
             else:
@@ -336,7 +400,7 @@ class BackgroundManager(object):
         :param product_flow:
         :return: ad, bf where ad has one nonzero entry (corresponding to product flow = 1.0) and bf is all zeros
         """
-        num_ad = sp.array([[0, self.tstack.bg_dict(product_flow.index), 1.0]])
+        num_ad = sp.array([[self.tstack.bg_dict(product_flow.index), 0, 1.0]])
         _ad = self._construct_csc(num_ad, self.tstack.ndim, 1)
         _bf = self._construct_csc([], self.mdim, 1)
         return _ad, _bf
