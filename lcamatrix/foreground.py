@@ -61,6 +61,10 @@ class ForegroundFragment(object):
         return len(self._qs)
 
     @property
+    def lcia_methods(self):
+        return self._qs
+
+    @property
     def Af(self):
         return pd.DataFrame(self._af.todense(), index=[k for k in self._foreground])
 
@@ -97,6 +101,9 @@ class ForegroundFragment(object):
         :param quantity:
         :return:
         """
+        if not quantity.is_lcia_method():
+            print('Quantity is not an LCIA method.')
+            return
         nums = []
         for m, em in enumerate(self._bg.emissions):
             val = flowdb.lookup_cf_from_flowable(em.flow, em.compartment, quantity)
