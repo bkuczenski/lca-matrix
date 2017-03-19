@@ -287,7 +287,7 @@ class BackgroundManager(object):
         return term
 
     @staticmethod
-    def _construct_csc(nums, nrows, ncols):
+    def construct_sparse(nums, nrows, ncols):
         """
 
         :param nums:
@@ -308,12 +308,12 @@ class BackgroundManager(object):
     def compute_lci(self, product_flow, **kwargs):
         if self.tstack.is_background(product_flow):
             ad, bf_tilde = self.make_background(product_flow)
-            x, bx = self._compute_bg_lci(ad, **kwargs)
+            x, bx = self.compute_bg_lci(ad, **kwargs)
         else:
             af, ad, bf = self.make_foreground(self.tstack.foreground(product_flow))
             x_tilde = np.linalg.inv(np.eye(af.shape[0]) - af.todense())[:, 0]
             ad_tilde = ad * x_tilde
-            x, bx = self._compute_bg_lci(ad_tilde, **kwargs)
+            x, bx = self.compute_bg_lci(ad_tilde, **kwargs)
             bf_tilde = csc_matrix(bf * x_tilde)
         return x, bx, bf_tilde
 
@@ -322,7 +322,7 @@ class BackgroundManager(object):
         Wrapper for compute_lci, returns exchanges with flows (and characterizations) drawn from self.archive
         :param product_flow: we need some way to figure out which process the exchanges belong to, so for now we
         ask the user
-        :param bf:
+        :param product_flow:
         :return: list of exchanges.
         """
         x, bx, bf_tilde = self.compute_lci(product_flow, **kwargs)
@@ -334,7 +334,7 @@ class BackgroundManager(object):
                 exchanges.append(ExchangeValue(product_flow.process, flow, em.direction, value=b[i, 0]))
         return exchanges
 
-    def _compute_bg_lci(self, ad, threshold=1e-8, count=100):
+    def compute_bg_lci(self, ad, threshold=1e-8, count=100):
         """
         Computes background LCI via iterative matrix multiplication.
         :param ad: a vector of background activity levels
@@ -343,7 +343,7 @@ class BackgroundManager(object):
         :return:
         """
         x = csr_matrix(ad)  # tested this with ecoinvent: convert to sparse: 280 ms; keep full: 4.5 sec
-        total = self._construct_csc([], *x.shape)
+        total = self.construct_sparse([], *x.shape)
         mycount = 0
         sumtotal = 0.0
 
@@ -370,13 +370,13 @@ class BackgroundManager(object):
             raise ValueError('B matrix already specified!')
         num_bg = sp.array([[co.emission.index, self.tstack.bg_dict(co.parent.index), co.value]
                            for co in self._bg_emission])
-        self._b_matrix = self._construct_csc(num_bg, self.mdim, self.tstack.ndim)
+        self._b_matrix = self.construct_sparse(num_bg, self.mdim, self.tstack.ndim)
 
     def _construct_a_matrix(self):
         ndim = self.tstack.ndim
         num_bg = sp.array([[self.tstack.bg_dict(i.term.index), self.tstack.bg_dict(i.parent.index), i.value]
                            for i in self._interior])
-        self._a_matrix = self._construct_csc(num_bg, ndim, ndim)
+        self._a_matrix = self.construct_sparse(num_bg, ndim, ndim)
 
     def product_flows(self, search=None, outputs=True):
         for k in self.tstack.foreground_flows(outputs=outputs):
@@ -401,8 +401,8 @@ class BackgroundManager(object):
         :return: ad, bf where ad has one nonzero entry (corresponding to product flow = 1.0) and bf is all zeros
         """
         num_ad = sp.array([[self.tstack.bg_dict(product_flow.index), 0, 1.0]])
-        _ad = self._construct_csc(num_ad, self.tstack.ndim, 1)
-        _bf = self._construct_csc([], self.mdim, 1)
+        _ad = self.construct_sparse(num_ad, self.tstack.ndim, 1)
+        _bf = self.construct_sparse([], self.mdim, 1)
         return _ad, _bf
 
     def make_foreground(self, product_flows=None):
@@ -454,9 +454,9 @@ class BackgroundManager(object):
         num_ad = sp.array([[self.tstack.bg_dict(i.term.index), fg_dict(i.parent.index), i.value] for i in ad_exch])
         num_bf = sp.array([[co.emission.index, fg_dict(co.parent.index), co.value] for co in bf_exch])
         ndim = self.tstack.ndim
-        _af = self._construct_csc(num_af, pdim, pdim)
-        _ad = self._construct_csc(num_ad, ndim, pdim)
-        _bf = self._construct_csc(num_bf, self.mdim, pdim)
+        _af = self.construct_sparse(num_af, pdim, pdim)
+        _ad = self.construct_sparse(num_ad, ndim, pdim)
+        _bf = self.construct_sparse(num_bf, self.mdim, pdim)
         if len(fg_cutoff) > 0:
             for co in fg_cutoff:
                 # TODO - make these into a matrix too
