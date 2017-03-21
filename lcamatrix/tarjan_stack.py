@@ -20,8 +20,8 @@ class TarjanStack(object):
         self._downstream = set()  # sccs on which background depends
 
         self._fg_processes = []  # ordered list of foreground nodes
-        self._fg_index = dict()  # maps product_flow.index to a* / b* column -- STATIC
-        self._bg_index = dict()  # maps product_flow.index to af / ad/ bf column -- VOLATILE
+        self._bg_index = dict()  # maps product_flow.index to a* / b* column -- STATIC
+        self._fg_index = dict()  # maps product_flow.index to af / ad/ bf column -- VOLATILE
 
     def check_stack(self, product_flow):
         """
@@ -160,27 +160,23 @@ class TarjanStack(object):
                 fg.append(current)
         return fg
 
-    def foreground(self, pf_index):
+    def foreground(self, pf):
         """
         computes a list of foreground SCCs that are downstream of the supplied product flow.
         Then converts the SCCs into an ordered list of product flows that make up the columns of the foreground.
-        :param pf_index: a product flow OR product flow index.
-        :return: not yet topologically-ordered, but loop-detecting list of non-background product flows
+        :param pf: a product flow.
+        :return: topologically-ordered, loop-detecting list of non-background product flows
         """
-        if isinstance(pf_index, ProductFlow):
-            index = self.scc_id(pf_index)
-            if self.is_background(index):
-                return []
-        else:
-            index = self.fg_dict(pf_index)
-            if index is None:
-                return []
+        index = self.scc_id(pf)
+        if index == self._background or index in self._downstream:
+            return []
+
         fg = self._foreground_components(index)
         fg_pf = []
         for c in fg:
             for k in self.scc(c):
-                    fg_pf.append(k)
-        return sorted(fg_pf, key=lambda x: (x.index != index, self._fg_index[x.index]))  # ensure pf is first
+                fg_pf.append(k)
+        return sorted(fg_pf, key=lambda x: (x.index != pf.index, self._fg_index[x.index]))  # ensure pf is first
 
     def foreground_flows(self, outputs=False):
         """

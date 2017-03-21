@@ -306,7 +306,7 @@ class BackgroundManager(object):
                 raise
 
     def compute_lci(self, product_flow, **kwargs):
-        if self.tstack.is_background(product_flow):
+        if self.is_background(product_flow):
             ad, bf_tilde = self.make_background(product_flow)
             x, bx = self.compute_bg_lci(ad, **kwargs)
         else:
@@ -351,6 +351,9 @@ class BackgroundManager(object):
             total += x
             x = self._a_matrix.dot(x)
             inc = sum(abs(x).data)
+            if inc == 0:
+                print('exact result')
+                break
             sumtotal += inc
             if inc / sumtotal < threshold:
                 break
@@ -394,6 +397,26 @@ class BackgroundManager(object):
                 if bool(re.search(search, str(k), flags=re.IGNORECASE)):
                     yield k
 
+    def foreground(self, pf):
+        """
+        Computes a list of indices for foreground nodes that are downstream of the named pf (inclusive).
+        :param pf: ProductFlow OR ProductFlow.index
+        :return: ordered list of product flows
+        """
+        if isinstance(pf, int):
+            pf = self.product_flow(pf)
+        if self.is_background(pf):
+            return []
+        return self.tstack.foreground(pf)
+
+    def is_background(self, pf):
+        """
+        Tells whether a Product Flow OR index is background.
+        :param pf: product_flow OR product_flow.index
+        :return: bool
+        """
+        return self.tstack.is_background(pf)
+
     def make_background(self, product_flow):
         """
         Constructs sparse ad representing background product flow
@@ -429,19 +452,19 @@ class BackgroundManager(object):
             if self.tstack.pdim == 0:
                 return None, None, None
             for fg in self._foreground:
-                if self.tstack.is_background(fg.term.index):
+                if self.is_background(fg.term.index):
                     ad_exch.append(fg)
                 else:
                     af_exch.append(fg)
         else:
-            if self.tstack.is_background(product_flow):
+            if self.is_background(product_flow):
                 _af = self.construct_sparse([], 1, 1)
                 bg_index = self.tstack.bg_dict(product_flow.index)
                 _ad = self._a_matrix[:, bg_index]
                 _bf = self._b_matrix[:, bg_index]
                 return _af, _ad, _bf
 
-            product_flows = self.tstack.foreground(product_flow)
+            product_flows = self.foreground(product_flow)
             pdim = len(product_flows)
             bf_exch = []
             _fg_dict = dict((pf.index, n) for n, pf in enumerate(product_flows))
@@ -451,7 +474,7 @@ class BackgroundManager(object):
 
             for fg in self._foreground:
                 if fg.parent.index in _fg_dict:
-                    if self.tstack.is_background(fg.term.index):
+                    if self.is_background(fg.term.index):
                         ad_exch.append(fg)
                     elif fg.term.index in _fg_dict:
                         af_exch.append(fg)
@@ -479,7 +502,7 @@ class BackgroundManager(object):
         while len(self._interior_incoming) > 0:
             k = self._interior_incoming.pop()
             k.adjust_val()
-            if self.tstack.is_background(k.parent.index):
+            if self.is_background(k.parent.index):
                 self._interior.append(k)
             else:
                 self._foreground.append(k)
@@ -487,7 +510,7 @@ class BackgroundManager(object):
         while len(self._cutoff_incoming) > 0:
             k = self._cutoff_incoming.pop()
             k.adjust_val()
-            if self.tstack.is_background(k.parent.index):
+            if self.is_background(k.parent.index):
                 self._bg_emission.append(k)
             else:
                 self._cutoff.append(k)

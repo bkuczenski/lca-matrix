@@ -14,6 +14,29 @@ def _write_row(sheet, row, data):
 class ForegroundPublication(object):
     """
     Create an XLS document reporting the contents of the foreground fragment.  For Kuczenski (2017) JIE
+
+    The main payload is a ForegroundFragment, which must support the following interface:
+     fragment.mdim - size of emissions
+     fragment.pdim - size of foreground
+     fragment.tdim - number of characterized lcia methods
+
+     fragment.Af, (p x p)
+     fragment.Ad, (: x p)
+     fragment.Bf (m x p)- sparse Af, Ad, Bf matrices
+
+     fragment.lcia_methods - t-list of quantities
+     fragment.foreground - p-list of ProductFlows (Af dims, Ad and Bf columns)
+     fragment.bg_flows - ordered ProductFlow (Ad row) generator
+     fragment.emissions - ordered Emission (Bf row) generator
+
+     fragment.x_tilde(i) - dense column vector of node weights for unit output of ith node (default: canonical i=0)
+
+    for lcia reporting:
+     fragment.E - sparse E matrix (must be t x m)
+     fragment.fg_lcia() - returns E * bf_tilde
+     fragment.bg_lcia() - returns E * bx
+     fragment.pf_lcia(product_flow) - returns E * b for specified product flow
+
     """
     def _create_xls(self):
         self._x = xlwt.Workbook()
@@ -32,15 +55,20 @@ class ForegroundPublication(object):
         self._lm = fragment.lcia_methods
         self._ff = fragment.foreground
 
-        self._lm_idx = dict((lm, n) for n, lm in enumerate(self._lm))
         self._ff_idx = dict((ff, n) for n, ff in enumerate(self._ff))  # maps entity to Af row/column
         self._ad_idx = dict((ad, n) for n, ad in enumerate(fragment.bg_flows))  # maps entity to Ad row
         self._bf_idx = dict((bf, n) for n, bf in enumerate(fragment.emissions))  # maps entity to Bf row
 
-        self._lm_len = ceil(log10(len(self._lm_idx)))
         self._ff_len = ceil(log10(len(self._ff_idx)))
         self._ad_len = ceil(log10(len(self._ad_idx)))
         self._bf_len = ceil(log10(len(self._bf_idx)))
+
+        if self._lcia:
+            self._lm_idx = dict((lm, n) for n, lm in enumerate(self._lm))
+            self._lm_len = ceil(log10(len(self._lm_idx)))
+        else:
+            self._lm_idx = dict()
+            self._lm_len = 0
 
         if private is None:
             self._private = []
@@ -55,10 +83,11 @@ class ForegroundPublication(object):
         self._ad_seen = [k for i, k in enumerate(fragment.bg_flows) if ad_tilde[i] != 0 and i not in self._private]
         self._bf_seen = [k for i, k in enumerate(fragment.emissions) if bf_tilde[i] != 0]
 
-        self._e = fragment.E[:, bf_tilde.nonzero()[0]].tocoo()
-
         self._scores = dict()
+        self._e = None
+
         if self._lcia:
+            self._e = fragment.E[:, bf_tilde.nonzero()[0]].tocoo()
             self._compute_scores(fragment)
 
     def _lm_key(self, idx):
@@ -106,7 +135,7 @@ class ForegroundPublication(object):
         self._scores['sx_tilde'] = fragment.bg_lcia().todense()
 
         sx_priv = None
-        ad_tilde = fragment.ad_tilde()
+        ad_tilde = self._ad * self._xtilde
         for i, k in enumerate(fragment.bg_flows):
             if i in self._private:
                 _priv = (fragment.pf_lcia(k) * ad_tilde[i]).todense()
@@ -156,7 +185,8 @@ class ForegroundPublication(object):
         self._write_entity_map()
         if self._lcia:
             self._write_lcia()
-            self._write_matrix('E', 'LciaMethod', 'Emission', self._lm_key, self._bf_key, self._e)
+            self._write_matrix('E', 'LciaMethod', 'Emission', self._lm_key, lambda x: self.key(self._bf_seen[x]),
+                               self._e)
 
         self._write_matrix('Af', 'ForegroundFlow', 'ForegroundNode', self._ff_key, self._ff_key, self._af)
         self._write_vector('x_tilde', 'ForegroundNode', self._ff_key, self._xtilde)

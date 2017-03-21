@@ -10,6 +10,22 @@ class ForegroundFragment(object):
     A portion of a background archive that can be represented separately from the background.  ForegroundFragments
     are the basis for LCI queries against background archives; are equivalent to performing an LCI query against
     a background archive.
+
+    Requires the background provider to meet the following interface:
+     bg.pdim - number of foreground flows
+     bg.ndim - number of background flows
+     bg.mdim - number of emissions
+     bg.is_background(pf)
+     bg.foreground(pf) - returns an ordered list of indices (w.r.t. p) downstream of the named product flow (inclusive)
+     bg.make_foreground(pf) - returns Af, Ad, Bf (sparse) for product flow
+
+     bg.background_flows() - generates ProductFlows in the background
+     bg.emissions - m-list of Emission objects
+     bg.construct_sparse(entries, nrows, ncols) - where entries is [[row index, colum index, data]..] - static
+
+    for LCIA:
+     bg.compute_bg_lci(ad) - iteratively calculate x, bx for n-dim input vector ad
+     bg.compute_lci(pf) - calculate x, bx, bf_tilde for product flow pf
     """
     def __init__(self, bg, product_flow):
         """
@@ -23,10 +39,10 @@ class ForegroundFragment(object):
         self._lcia = []  # array of sparse e vectors
         self._qs = []  # array quantities corresponding to rows in lcia
 
-        if bg.tstack.is_background(product_flow):
+        if bg.is_background(product_flow):
             self._foreground = [product_flow]
         else:
-            self._foreground = bg.tstack.foreground(product_flow)
+            self._foreground = bg.foreground(product_flow)
         self._af, self._ad, self._bf = bg.make_foreground(product_flow)
         print('Fragment with %d foreground flows' % self.pdim)
         print(' Ad: %dx%d, %d nonzero' % (self.ndim, self.pdim, self._ad.nnz))
@@ -43,12 +59,9 @@ class ForegroundFragment(object):
     def product_flow(self):
         return self._pf
 
-    def is_bg(self, product_flow):
-        return self._bg.tstack.is_background(product_flow)
-
     @property
     def bg_flows(self):
-        for k in self._bg.tstack.background_flows():
+        for k in self._bg.background_flows():
             yield k
 
     @property
