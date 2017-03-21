@@ -15,8 +15,7 @@ class Emission(object):
         :param direction: the direction of the exchange
         """
         self._index = index
-        self._flow = flow['Name']
-        self._comp = flow['Compartment']
+        self._flow = flow
         self._direction = direction
 
         self._hash = (flow.uuid, direction)
@@ -53,14 +52,14 @@ class Emission(object):
 
     @property
     def compartment(self):
-        return self._comp
+        return self._flow['Compartment']
 
     @property
     def direction(self):
         return self._direction
 
     def __str__(self):
-        return '%s: %s %s' % (self._direction, self._flow, self._comp)
+        return '%s: %s %s' % (self._direction, self._flow['Name'], self.compartment)
 
     def table_label(self):
         return str(self)

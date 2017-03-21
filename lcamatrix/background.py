@@ -310,7 +310,7 @@ class BackgroundManager(object):
             ad, bf_tilde = self.make_background(product_flow)
             x, bx = self.compute_bg_lci(ad, **kwargs)
         else:
-            af, ad, bf = self.make_foreground(self.tstack.foreground(product_flow))
+            af, ad, bf = self.make_foreground(product_flow)
             x_tilde = np.linalg.inv(np.eye(af.shape[0]) - af.todense())[:, 0]
             ad_tilde = ad * x_tilde
             x, bx = self.compute_bg_lci(ad_tilde, **kwargs)
@@ -405,18 +405,21 @@ class BackgroundManager(object):
         _bf = self.construct_sparse([], self.mdim, 1)
         return _ad, _bf
 
-    def make_foreground(self, product_flows=None):
+    def make_foreground(self, product_flow=None):
         """
         make af, ad, bf for a given list of product flows, or entire if input list is omitted.
-        :param product_flows: a list of ProductFlows to include as foreground columns.  Should be the output of
-        tstack.foreground(pf) in order to be complete.
+        :param product_flow: a single ProductFlow to generate the foreground. If omitted, generate entire foreground.
+         if the product_flow is itself in the background, create a foreground model based on its inventory.
         :return: af, ad, bf sparse csc_matrixes
-        TODO: also return a matrix of cutoff flows
+
+        Not dealing with cutoffs because they are out-of-band here. cutoffs belong to the Big Foreground, not to the
+        little archive Foregrounds.  A background database with cutoffs will properly situate the cutoffs in the B
+        matrix, where they are treated equivalently.
         """
         af_exch = []
         ad_exch = []
         fg_cutoff = []
-        if product_flows is None:
+        if product_flow is None:
             pdim = self.tstack.pdim
 
             def fg_dict(x):
@@ -431,6 +434,14 @@ class BackgroundManager(object):
                 else:
                     af_exch.append(fg)
         else:
+            if self.tstack.is_background(product_flow):
+                _af = self.construct_sparse([], 1, 1)
+                bg_index = self.tstack.bg_dict(product_flow.index)
+                _ad = self._a_matrix[:, bg_index]
+                _bf = self._b_matrix[:, bg_index]
+                return _af, _ad, _bf
+
+            product_flows = self.tstack.foreground(product_flow)
             pdim = len(product_flows)
             bf_exch = []
             _fg_dict = dict((pf.index, n) for n, pf in enumerate(product_flows))

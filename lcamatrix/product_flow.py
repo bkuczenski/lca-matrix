@@ -23,6 +23,7 @@ class ProductFlow(object):
         self._index = index
         self._flow = flow
         self._process = process
+        self._direction = None
 
         self._hash = (flow.uuid, None)
         self._inbound_ev = 1.0
@@ -36,11 +37,15 @@ class ProductFlow(object):
         else:
             self._hash = (flow.uuid, process.uuid)
             ref_exch = process.reference(flow)
+            self._direction = ref_exch.direction
             self._inbound_ev = ref_exch.value
             if self._inbound_ev is None:
                 print('None inbound ev! using 1.0. f:%s t:%s' % (flow, process))
                 self._inbound_ev = 1.0
-            if ref_exch.direction == 'Input':
+            elif self._inbound_ev == 0:
+                raise ZeroDivisionError('No inbound EV for f:%s t:%s' % (flow.get_external_ref(),
+                                                                         process.get_external_ref()))
+            if self._direction == 'Input':
                 self._inbound_ev *= -1
 
     def __eq__(self, other):
@@ -65,7 +70,10 @@ class ProductFlow(object):
         :param value:
         :return:
         """
-        self._inbound_ev -= value
+        if value == self._inbound_ev:
+            print('Ignoring unitary self-dependency')
+        else:
+            self._inbound_ev -= value
 
     @property
     def index(self):
@@ -86,6 +94,10 @@ class ProductFlow(object):
     @property
     def process(self):
         return self._process
+
+    @property
+    def direction(self):
+        return self._direction
 
     @property
     def inbound_ev(self):

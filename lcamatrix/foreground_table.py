@@ -79,7 +79,7 @@ class ForegroundTable(object):
                 agg_add = ' & %4.3g' % xtilde[row]
             else:
                 agg_add = ' & '
-            for i, val in self._fAf.loc[fg].iteritems():
+            for i, val in self._f.Af.loc[fg].iteritems():
                 value = '%4.3g' % val
                 if i >= self.max_cols:
                     table += ' & $\\ldots$'

@@ -180,7 +180,7 @@ class TarjanStack(object):
         for c in fg:
             for k in self.scc(c):
                     fg_pf.append(k)
-        return sorted(fg_pf, key=lambda x: self._fg_index[x.index])
+        return sorted(fg_pf, key=lambda x: (x.index != index, self._fg_index[x.index]))  # ensure pf is first
 
     def foreground_flows(self, outputs=False):
         """
