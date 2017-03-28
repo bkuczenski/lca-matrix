@@ -10,7 +10,7 @@ def tex_sanitize(tex):
     return tex
 
 
-class ForegroundTable(object):
+class ForegroundTeX(object):
     def __init__(self, fragment, max_cols=8):
         self._f = fragment
         self._pf = fragment.product_flow
@@ -73,13 +73,14 @@ class ForegroundTable(object):
             agg_string = None
         table = self._table_header('(node) Foreground flow', aggregate=agg_string)
         xtilde = self._f.x_tilde()
+        af = self._f.Af.todense().tolist()
         for row, fg in enumerate(self._f.foreground):
             table += tex_sanitize('(%d) %s [%s]' % (row, fg.flow['Name'], fg.process['SpatialScope']))
             if row >= self.max_cols:
                 agg_add = ' & %4.3g' % xtilde[row]
             else:
                 agg_add = ' & '
-            for i, val in self._f.Af.loc[fg].iteritems():
+            for i, val in enumerate(af[row]):
                 value = '%4.3g' % val
                 if i >= self.max_cols:
                     table += ' & $\\ldots$'
@@ -110,50 +111,67 @@ class ForegroundTable(object):
         table += '\\hline\n'
         return table
 
-    def _do_dep_table(self, dataframe, agg, max_rows):
+    def _do_dep_table(self, rows, data, do_agg, max_rows):
+        """
+        :param rows: rows generator
+        :param data: sparse data table whose rows map to rows
+        :param do_agg: whether to include the aggregation column
+        :param max_rows: max number of rows to print
+        :return: table text
+        """
         num_rows = 0
         table = ''
-        for row, series in dataframe.iterrows():
-            num_rows += 1
-            if num_rows > max_rows:
-                table += self._table_ellipsis(len(dataframe) - max_rows)
-                break
-            table += '%s' % tex_sanitize(row.table_label())
-            for i, val in enumerate(series):
-                if i >= self.max_cols:
-                    table += ' & $\\ldots$ '
+        agg = data * self._f.x_tilde()
+        num_nonzero = len(agg.nonzero()[0])
+        for row, entity in enumerate(rows):
+            if agg[row] != 0.0:
+                num_rows += 1
+                if num_rows > max_rows:
+                    table += self._table_ellipsis(num_nonzero - max_rows)
                     break
-                if val == 0:
-                    table += ' & '
-                else:
-                    table += ' & \\dependency'
-            if agg is not None:
-                table += ' & %5.3g' % agg.loc[row][0]
-            table += TAB_LF
+                table += '%s' % tex_sanitize(entity.table_label())
+                for i, val in enumerate(data[row].todense().flat):
+                    if i >= self.max_cols:
+                        table += ' & $\\ldots$ '
+                        break
+                    if val == 0:
+                        table += ' & '
+                    else:
+                        table += ' & \\dependency'
+                if do_agg:
+                    table += ' & %5.3g' % agg[row]
+                table += TAB_LF
+
         table += '\\hline\n'
         return table
 
     def _ad_table(self, aggregate=False, max_rows=20):
         if aggregate:
-            agg = self._f.show_ad_tilde()
             agg_string = '$\\tilde{a_d}$'
         else:
-            agg = None
             agg_string = None
         table = self._table_header('Background Dependencies', aggregate=agg_string)
-        table += self._do_dep_table(self._f.show_Ad(), agg, max_rows)
+        table += self._do_dep_table(self._f.bg_flows, self._f.Ad, aggregate, max_rows)
 
         return table
 
     def _bf_table(self, aggregate=False, max_rows=20):
         if aggregate:
-            agg = self._f.show_bf_tilde()
             agg_string = '$\\tilde{b_f}$'
         else:
-            agg = None
             agg_string = None
-        table = self._table_header('Foreground Emissions and Cutoffs', aggregate=agg_string)
-        table += self._do_dep_table(self._f.show_Bf(), agg, max_rows)
+        table = self._table_header('Foreground Emissions', aggregate=agg_string)
+        table += self._do_dep_table(self._f.elementary, self._f.Bf_elementary, aggregate, max_rows)
+
+        return table
+
+    def _co_table(self, aggregate=False, max_rows=20):
+        if aggregate:
+            agg_string = '$\\tilde{b_f}$'
+        else:
+            agg_string = None
+        table = self._table_header('Cutoffs', aggregate=agg_string)
+        table = self._do_dep_table(self._f.cutoffs, self._f.Bf_cutoff, aggregate, max_rows)
 
         return table
 
@@ -165,15 +183,20 @@ class ForegroundTable(object):
             table += 'Very large foreground ($p=%d$) omitted.\n' % total_rows
             return table
         table += self._af_table(aggregate)
+
         if aggregate:
             table += self._x_tilde_table()
-        total_rows += min(ad_rows, len(self._f.show_Ad()))
+
+        table += self._co_table(aggregate)
+
+        total_rows += min(ad_rows, len((self._f.Ad * self._f.x_tilde()).nonzero()[0]))
         if total_rows > max_rows:
             ad_rows -= (total_rows - max_rows)
             total_rows = max_rows
             bf_rows = 0
         table += self._ad_table(aggregate, ad_rows)
-        total_rows += min(bf_rows, len(self._f.show_Bf()))
+
+        total_rows += min(bf_rows, len((self._f.Bf * self._f.x_tilde()).nonzero()[0]))
         if total_rows > max_rows:
             bf_rows -= (total_rows - max_rows)
         table += self._bf_table(aggregate, bf_rows)

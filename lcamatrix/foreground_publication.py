@@ -1,14 +1,8 @@
 import xlwt
 from math import ceil, log10
+from collections import defaultdict
 
 from lcamatrix.product_flow import ProductFlow
-
-
-def _write_row(sheet, row, data):
-    for i, d in enumerate(data):
-        sheet.write(row, i, d)
-    row += 1
-    return row
 
 
 class ForegroundPublication(object):
@@ -16,6 +10,8 @@ class ForegroundPublication(object):
     Create an XLS document reporting the contents of the foreground fragment.  For Kuczenski (2017) JIE
 
     The main payload is a ForegroundFragment, which must support the following interface:
+     fragment.uuid - uuid of ForegroundFragment- to represent its reference flow
+
      fragment.mdim - size of emissions
      fragment.pdim - size of foreground
      fragment.tdim - number of characterized lcia methods
@@ -28,6 +24,7 @@ class ForegroundPublication(object):
      fragment.foreground - p-list of ProductFlows (Af dims, Ad and Bf columns)
      fragment.bg_flows - ordered ProductFlow (Ad row) generator
      fragment.emissions - ordered Emission (Bf row) generator
+     fragment.is_elem - np array of boolean values discriminating between elementary and non-elementary rows of Bf
 
      fragment.x_tilde(i) - dense column vector of node weights for unit output of ith node (default: canonical i=0)
 
@@ -40,10 +37,17 @@ class ForegroundPublication(object):
     """
     def _create_xls(self):
         self._x = xlwt.Workbook()
+        self._wid = defaultdict(int)
+
+    def _save_xls(self, filename):
+        for i, val in self._wid.items():
+            self._x.get_sheet(0).col(i).width = (val + 1) * 200
+        self._x.save(filename)
 
     def __init__(self, fragment, detail=True, lcia=True, private=None):
         self._detail = detail
         self._lcia = lcia and fragment.tdim > 0
+        self._uuid = fragment.uuid
 
         self._af = fragment.Af.tocoo()
         self._ad = fragment.Ad.tocoo()
@@ -51,6 +55,7 @@ class ForegroundPublication(object):
         self._xtilde = fragment.x_tilde()
 
         self._x = None  # storage spot for workbook in progress
+        self._wid = None
 
         self._lm = fragment.lcia_methods
         self._ff = fragment.foreground
@@ -81,7 +86,8 @@ class ForegroundPublication(object):
         bf_tilde = self._bf * self._xtilde
 
         self._ad_seen = [k for i, k in enumerate(fragment.bg_flows) if ad_tilde[i] != 0 and i not in self._private]
-        self._bf_seen = [k for i, k in enumerate(fragment.emissions) if bf_tilde[i] != 0]
+        self._bf_seen = [k for i, k in enumerate(fragment.emissions) if bf_tilde[i] != 0 and fragment.is_elem[i]]
+        self._co_seen = [k for i, k in enumerate(fragment.emissions) if bf_tilde[i] != 0 and not fragment.is_elem[i]]
 
         self._scores = dict()
         self._e = None
@@ -152,29 +158,33 @@ class ForegroundPublication(object):
 
     def _print_lm(self, lm=None):
         if lm is None:
-            return 'Key', 'Origin', 'LciaMethod', 'Name', 'ReferenceUnit'
+            return 'Key', 'Origin', 'Identifier', 'ReferenceUnit', 'Descriptor'
         else:
-            return self.key(lm), lm.origin, lm.get_external_ref(), lm['Name'], lm.unit()
+            return self.key(lm), lm.origin, lm.get_external_ref(), lm.unit(), lm['Name']
 
     def _print_ff(self, ff=None):
         if ff is None:
-            return 'Key', 'Origin', 'Name', 'Direction', 'ReferenceUnit'
+            return 'Key', 'Origin', 'Identifier', 'ReferenceUnit', 'Descriptor', 'FlowDirection', 'FlowName'
         else:
-            return self.key(ff), 'Foreground', str(ff.flow), ff.direction, ff.flow.unit()
+            if self._ff_idx[ff] == 0:
+                _id = self._uuid
+            else:
+                _id = ''
+            return self.key(ff), 'Foreground', _id, ff.flow.unit(), str(ff.process), ff.direction, ff.flow['Name']
 
     def _print_ad(self, ad=None):
         if ad is None:
-            return 'Key', 'Origin', 'Process', 'ReferenceFlow', 'ProcessName', 'FlowName', 'Direction', 'ReferenceUnit'
+            return 'Key', 'Origin', 'Identifier', 'ReferenceUnit', 'Descriptor', 'FlowDirection', 'ReferenceFlow'
         else:
-            return (self.key(ad), ad.process.origin, ad.process.get_external_ref(), ad.flow.get_external_ref(),
-                    str(ad.process), ad.flow['Name'], ad.direction, ad.flow.unit())
+            return (self.key(ad), ad.process.origin, ad.process.get_external_ref(), ad.flow.unit(),
+                    str(ad.process), ad.direction, ad.flow.get_external_ref())
 
     def _print_bf(self, bf=None):
         if bf is None:
-            return 'Key', 'Origin', 'Flow', 'FlowName', 'Compartment', 'Direction', 'ReferenceUnit'
+            return 'Key', 'Origin', 'Identifier', 'ReferenceUnit', 'Descriptor', 'FlowDirection', 'Compartment'
         else:
-            return (self.key(bf), bf.flow.origin, bf.flow.get_external_ref(), bf.flow['Name'],
-                    '; '.join(filter(None, bf.compartment)), bf.direction, bf.flow.unit())
+            return (self.key(bf), bf.flow.origin, bf.flow.get_external_ref(), bf.flow.unit(), bf.flow['Name'],
+                    bf.direction, '; '.join(filter(None, bf.compartment)))
 
     def publish(self, filename):
         """
@@ -199,13 +209,22 @@ class ForegroundPublication(object):
             self._write_matrix('Bf', 'Emission', 'ForegroundNode', self._bf_key, self._ff_key, self._bf)
         self._write_vector('bf_tilde', 'Emission', self._bf_key, self._bf * self._xtilde)
 
-        self._x.save(filename)
+        self._save_xls(filename)
 
-    @staticmethod
-    def _write_block(sheet, row, ite, printer):
-        row = _write_row(sheet, row, printer())
+    def _update_width(self, col, data):
+        self._wid[col] = max(self._wid[col], len(str(data)))
+
+    def _write_row(self, sheet, row, data):
+        for i, d in enumerate(data):
+            sheet.write(row, i, d)
+            self._update_width(i, d)
+        row += 1
+        return row
+
+    def _write_block(self, sheet, row, ite, printer):
+        row = self._write_row(sheet, row, printer())
         for k in ite:
-            row = _write_row(sheet, row, printer(k))
+            row = self._write_row(sheet, row, printer(k))
         row += 1
         return row
 
@@ -215,23 +234,30 @@ class ForegroundPublication(object):
 
         # first lcia methods
         if self._lcia:
+            row = self._write_row(emap, row, ('Characterizaton Quantities', ))
             row = self._write_block(emap, row, self._lm, self._print_lm)
 
         # next, the foreground
+        row = self._write_row(emap, row, ('Foreground Flows',))
         row = self._write_block(emap, row, self._ff, self._print_ff)
 
         # background
+        row = self._write_row(emap, row, ('Background Dependencies',))
         row = self._write_block(emap, row, self._ad_seen, self._print_ad)
 
-        # ems
+        # cutoffs-
+        row = self._write_row(emap, row, ('Cutoffs',))
+        row = self._write_block(emap, row, self._co_seen, self._print_bf)
+
+        row = self._write_row(emap, row, ('Elementary Flows',))
         self._write_block(emap, row, self._bf_seen, self._print_bf)
 
     def _write_lcia(self):
         scores = self._x.add_sheet('LciaScores')
-        row = _write_row(scores, 0, ('LciaMethod', ) + tuple(self.key(l) for l in self._lm) + ('comment', ))
+        row = self._write_row(scores, 0, ('LciaMethod', ) + tuple(self.key(l) for l in self._lm) + ('comment', ))
 
         def _write_score_line(r, key, comment):
-            return _write_row(scores, r, [key] + [float(k) for k in self._scores[key]] + [comment])
+            return self._write_row(scores, r, [key] + [float(k) for k in self._scores[key]] + [comment])
 
         row = _write_score_line(row, 's_tilde', 'Total LCIA Score')
         row = _write_score_line(row, 'sf_tilde', 'Foreground LCIA')
@@ -243,19 +269,19 @@ class ForegroundPublication(object):
 
     def _write_vector(self, sheetname, name, key, array):
         sheet = self._x.add_sheet(sheetname)
-        row = _write_row(sheet, 0, (name, 'Data'))
+        row = self._write_row(sheet, 0, (name, 'Data'))
         for i, k in enumerate(array):
             if k != 0:
-                row = _write_row(sheet, row, (key(i), float(k)))
+                row = self._write_row(sheet, row, (key(i), float(k)))
 
     def _write_matrix(self, sheetname, rowname, colname, rowkey, colkey, coo):
         sheet = self._x.add_sheet(sheetname)
-        row = _write_row(sheet, 0, (rowname, colname, 'Data'))
+        row = self._write_row(sheet, 0, (rowname, colname, 'Data'))
         rows = coo.row
         cols = coo.col
         data = coo.data
         for i, k in enumerate(data):
-            row = _write_row(sheet, row, (rowkey(rows[i]), colkey(cols[i]), float(k)))
+            row = self._write_row(sheet, row, (rowkey(rows[i]), colkey(cols[i]), float(k)))
 
 
 '''

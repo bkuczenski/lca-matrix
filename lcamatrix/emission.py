@@ -59,7 +59,7 @@ class Emission(object):
         return self._direction
 
     def __str__(self):
-        return '%s: %s %s' % (self._direction, self._flow['Name'], self.compartment)
+        return '%s: %s [%s]' % (self._direction, self._flow['Name'], ', '.join(filter(None, self.compartment)))
 
     def table_label(self):
         return str(self)
