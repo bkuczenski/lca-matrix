@@ -40,8 +40,8 @@ class ForegroundPublication(object):
         self._wid = defaultdict(int)
 
     def _save_xls(self, filename):
-        for i, val in self._wid.items():
-            self._x.get_sheet(0).col(i).width = (val + 1) * 200
+        for k, val in self._wid.items():
+            self._x.get_sheet(k[0]).col(k[1]).width = (val + 2) * 256
         self._x.save(filename)
 
     def __init__(self, fragment, detail=True, lcia=True, private=None):
@@ -93,7 +93,9 @@ class ForegroundPublication(object):
         self._e = None
 
         if self._lcia:
-            self._e = fragment.E[:, bf_tilde.nonzero()[0]].tocoo()
+            # # outmoded: select only characterizations for foreground emissions
+            # self._e = fragment.E[:, bf_tilde.nonzero()[0]].tocoo()
+            self._e = fragment.E.tocoo()
             self._compute_scores(fragment)
 
     def _lm_key(self, idx):
@@ -186,7 +188,7 @@ class ForegroundPublication(object):
             return (self.key(bf), bf.flow.origin, bf.flow.get_external_ref(), bf.flow.unit(), bf.flow['Name'],
                     bf.direction, '; '.join(filter(None, bf.compartment)))
 
-    def publish(self, filename):
+    def publish(self, filename, full=False):
         """
         Write the workbook
         :return:
@@ -195,18 +197,25 @@ class ForegroundPublication(object):
         self._write_entity_map()
         if self._lcia:
             self._write_lcia()
-            self._write_matrix('E', 'LciaMethod', 'Emission', self._lm_key, lambda x: self.key(self._bf_seen[x]),
-                               self._e)
+            if full:
+                self._write_matrix('E.T', 'LciaMethod', 'Emission', self._bf_key, self._lm_key,
+                                   self._e.T, full=full)
+            else:
+                self._write_matrix('E', 'LciaMethod', 'Emission', self._lm_key, self._bf_key,
+                                   self._e)
+            # self._write_matrix('E', 'LciaMethod', 'Emission', self._lm_key, lambda x: self.key(self._bf_char[x]),
+            #                   self._e)
 
-        self._write_matrix('Af', 'ForegroundFlow', 'ForegroundNode', self._ff_key, self._ff_key, self._af)
+        self._write_matrix('Af', 'ForegroundFlow', 'ForegroundNode', self._ff_key, self._ff_key, self._af, full=full)
         self._write_vector('x_tilde', 'ForegroundNode', self._ff_key, self._xtilde)
 
         if self._detail:
-            self._write_matrix('Ad', 'BackgroundDependency', 'ForegroundNode', self._ad_key, self._ff_key, self._ad)
+            self._write_matrix('Ad', 'BackgroundDependency', 'ForegroundNode', self._ad_key, self._ff_key, self._ad,
+                               full = full)
         self._write_vector('ad_tilde', 'BackgroundDependency', self._ad_key, self._ad * self._xtilde)
 
         if self._detail:
-            self._write_matrix('Bf', 'Emission', 'ForegroundNode', self._bf_key, self._ff_key, self._bf)
+            self._write_matrix('Bf', 'Emission', 'ForegroundNode', self._bf_key, self._ff_key, self._bf, full=full)
         self._write_vector('bf_tilde', 'Emission', self._bf_key, self._bf * self._xtilde)
 
         self._save_xls(filename)
@@ -217,7 +226,7 @@ class ForegroundPublication(object):
     def _write_row(self, sheet, row, data):
         for i, d in enumerate(data):
             sheet.write(row, i, d)
-            self._update_width(i, d)
+            self._update_width((sheet.get_name(), i), d)
         row += 1
         return row
 
@@ -274,14 +283,38 @@ class ForegroundPublication(object):
             if k != 0:
                 row = self._write_row(sheet, row, (key(i), float(k)))
 
-    def _write_matrix(self, sheetname, rowname, colname, rowkey, colkey, coo):
+    def _write_matrix(self, sheetname, rowname, colname, rowkey, colkey, coo, full=False):
+        """
+        Write out a matrix, either in sparse format (row, col, data) or full format
+        :param sheetname:
+        :param rowname:
+        :param colname:
+        :param rowkey:
+        :param colkey:
+        :param coo:
+        :param full:
+        :return:
+        """
         sheet = self._x.add_sheet(sheetname)
-        row = self._write_row(sheet, 0, (rowname, colname, 'Data'))
-        rows = coo.row
-        cols = coo.col
-        data = coo.data
-        for i, k in enumerate(data):
-            row = self._write_row(sheet, row, (rowkey(rows[i]), colkey(cols[i]), float(k)))
+        if full:
+            dense = coo.todense()
+            row = self._write_row(sheet, 0, [''] + [colkey(i) for i in range(dense.shape[1])])
+            for i, data in enumerate(dense):
+                if data.any():
+                    rowdat = [rowkey(i)]
+                    for elem in data.T:
+                        if elem == 0.0:
+                            rowdat.append('')
+                        else:
+                            rowdat.append(float(elem))
+                    row = self._write_row(sheet, row, rowdat)
+        else:
+            row = self._write_row(sheet, 0, (rowname, colname, 'Data'))
+            rows = coo.row
+            cols = coo.col
+            data = coo.data
+            for i, k in enumerate(data):
+                row = self._write_row(sheet, row, (rowkey(rows[i]), colkey(cols[i]), float(k)))
 
 
 '''
