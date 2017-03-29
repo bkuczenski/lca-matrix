@@ -96,6 +96,8 @@ class ForegroundPublication(object):
             # # outmoded: select only characterizations for foreground emissions
             # self._e = fragment.E[:, bf_tilde.nonzero()[0]].tocoo()
             self._e = fragment.E.tocoo()
+            self._bf_seen = [k for i, k in enumerate(fragment.emissions) if (bf_tilde[i] != 0 and fragment.is_elem[i])
+                             or fragment.E[:, i].count_nonzero() > 0]
             self._compute_scores(fragment)
 
     def _lm_key(self, idx):
