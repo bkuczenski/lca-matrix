@@ -44,7 +44,17 @@ class ForegroundPublication(object):
             self._x.get_sheet(k[0]).col(k[1]).width = (val + 2) * 256
         self._x.save(filename)
 
-    def __init__(self, fragment, detail=True, lcia=True, private=None):
+    def __init__(self, fragment, detail=True, lcia=True, private=None, audit_cf=False):
+        """
+
+        :param fragment: ForegroundFragment
+        :param detail: [True] include full matrices; only include aggregation results ad_tilde, bf_tilde, x_tilde
+        :param lcia: [True] whether to include LCIA methods + results
+        :param private: [None] list/set of ProductFlows to conceal in published result (untested; only implemented
+          for dependencies; TODO: test; implement for foreground flows)
+        :param audit_cf: [False] if True, include all nonzero characterization factors; if False, include only factors
+          for flows that appear in the foreground.
+        """
         self._detail = detail
         self._lcia = lcia and fragment.tdim > 0
         self._uuid = fragment.uuid
@@ -91,13 +101,20 @@ class ForegroundPublication(object):
 
         self._scores = dict()
         self._e = None
+        self._e_col_key = None
 
         if self._lcia:
             # # outmoded: select only characterizations for foreground emissions
-            # self._e = fragment.E[:, bf_tilde.nonzero()[0]].tocoo()
-            self._e = fragment.E.tocoo()
-            self._bf_seen = [k for i, k in enumerate(fragment.emissions) if (bf_tilde[i] != 0 and fragment.is_elem[i])
-                             or fragment.E[:, i].count_nonzero() > 0]
+            if audit_cf:
+                self._e = fragment.E.tocoo()
+                self._bf_seen = [k for i, k in enumerate(fragment.emissions) if
+                                 (bf_tilde[i] != 0 and fragment.is_elem[i]) or
+                                 fragment.E[:, i].count_nonzero() > 0]
+                self._e_col_key = self._bf_key
+            else:
+                self._e = fragment.E[:, bf_tilde.nonzero()[0]].tocoo()
+                self._e_col_key = lambda x: self.key(self._bf_seen[x])
+
             self._compute_scores(fragment)
 
     def _lm_key(self, idx):
@@ -162,30 +179,37 @@ class ForegroundPublication(object):
 
     def _print_lm(self, lm=None):
         if lm is None:
-            return 'Key', 'Origin', 'Identifier', 'ReferenceUnit', 'Descriptor'
+            return 'Key', 'Origin', 'Identifier', 'ReferenceUnit', 'Name'
         else:
             return self.key(lm), lm.origin, lm.get_external_ref(), lm.unit(), lm['Name']
 
     def _print_ff(self, ff=None):
         if ff is None:
-            return 'Key', 'Origin', 'Identifier', 'ReferenceUnit', 'Descriptor', 'FlowDirection', 'FlowName'
+            return 'Key', 'Origin', 'Identifier', 'ReferenceUnit', 'Name', 'FlowDirection', 'FlowName'
         else:
-            if self._ff_idx[ff] == 0:
+            if ff in self._ff_idx and self._ff_idx[ff] == 0:
                 _id = self._uuid
             else:
-                _id = ''
+                _id = self.key(ff)
             return self.key(ff), 'Foreground', _id, ff.flow.unit(), str(ff.process), ff.direction, ff.flow['Name']
 
     def _print_ad(self, ad=None):
         if ad is None:
-            return 'Key', 'Origin', 'Identifier', 'ReferenceUnit', 'Descriptor', 'FlowDirection', 'ReferenceFlow'
+            return 'Key', 'Origin', 'Identifier', 'ReferenceUnit', 'Name', 'FlowDirection', 'ReferenceFlow'
         else:
             return (self.key(ad), ad.process.origin, ad.process.get_external_ref(), ad.flow.unit(),
                     str(ad.process), ad.direction, ad.flow.get_external_ref())
 
+    def _print_co(self, co=None):
+        if co is None:
+            return 'Key', 'Origin', 'Identifier', 'ReferenceUnit', 'Name', 'FlowDirection'
+        else:
+            return (self.key(co), co.flow.origin, co.flow.get_external_ref(), co.flow.unit(), co.flow['Name'],
+                    co.direction)
+
     def _print_bf(self, bf=None):
         if bf is None:
-            return 'Key', 'Origin', 'Identifier', 'ReferenceUnit', 'Descriptor', 'FlowDirection', 'Compartment'
+            return 'Key', 'Origin', 'Identifier', 'ReferenceUnit', 'Name', 'FlowDirection', 'Compartment'
         else:
             return (self.key(bf), bf.flow.origin, bf.flow.get_external_ref(), bf.flow.unit(), bf.flow['Name'],
                     bf.direction, '; '.join(filter(None, bf.compartment)))
@@ -200,20 +224,23 @@ class ForegroundPublication(object):
         if self._lcia:
             self._write_lcia()
             if full:
-                self._write_matrix('E.T', 'LciaMethod', 'Emission', self._bf_key, self._lm_key,
+                self._write_matrix('E.T', 'LciaMethod', 'Emission', self._e_col_key, self._lm_key,
                                    self._e.T, full=full)
             else:
-                self._write_matrix('E', 'LciaMethod', 'Emission', self._lm_key, self._bf_key,
+                self._write_matrix('E', 'LciaMethod', 'Emission', self._lm_key, self._e_col_key,
                                    self._e)
             # self._write_matrix('E', 'LciaMethod', 'Emission', self._lm_key, lambda x: self.key(self._bf_char[x]),
             #                   self._e)
 
-        self._write_matrix('Af', 'ForegroundFlow', 'ForegroundNode', self._ff_key, self._ff_key, self._af, full=full)
+        if self._detail:
+            self._write_matrix('Af', 'ForegroundFlow', 'ForegroundNode', self._ff_key, self._ff_key, self._af,
+                               full=full)
+
         self._write_vector('x_tilde', 'ForegroundNode', self._ff_key, self._xtilde)
 
         if self._detail:
             self._write_matrix('Ad', 'BackgroundDependency', 'ForegroundNode', self._ad_key, self._ff_key, self._ad,
-                               full = full)
+                               full=full)
         self._write_vector('ad_tilde', 'BackgroundDependency', self._ad_key, self._ad * self._xtilde)
 
         if self._detail:
@@ -249,7 +276,7 @@ class ForegroundPublication(object):
             row = self._write_block(emap, row, self._lm, self._print_lm)
 
         # next, the foreground
-        row = self._write_row(emap, row, ('Foreground Flows',))
+        row = self._write_row(emap, row, ('Foreground Nodes',))
         row = self._write_block(emap, row, self._ff, self._print_ff)
 
         # background
@@ -258,7 +285,7 @@ class ForegroundPublication(object):
 
         # cutoffs-
         row = self._write_row(emap, row, ('Cutoffs',))
-        row = self._write_block(emap, row, self._co_seen, self._print_bf)
+        row = self._write_block(emap, row, self._co_seen, self._print_co)
 
         row = self._write_row(emap, row, ('Elementary Flows',))
         self._write_block(emap, row, self._bf_seen, self._print_bf)

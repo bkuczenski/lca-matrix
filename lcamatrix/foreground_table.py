@@ -20,13 +20,23 @@ class ForegroundTeX(object):
     def pdim(self):
         return self._f.pdim
 
-    def _table_start(self, aggregate):
+    def _table_start(self, aggregate=False, section=False):
+        """
+
+        :param aggregate: [False] whether aggregation is included
+        :param section: [False] whether to print a section heading
+        :return:
+        """
         # begin table
-        table = '\\subsection{%s}\n%s\n\n{\small from %s}\n' % (tex_sanitize(self._pf.flow['Name']),
-                                                                tex_sanitize('; '.join(self._pf.flow['Compartment'])),
-                                                                tex_sanitize(str(self._pf.process)))
+        if section:
+            table = '\\subsection{%s}\n%s\n\n' % (tex_sanitize(self._pf.flow['Name']),
+                                                  tex_sanitize('; '.join(self._pf.flow['Compartment'])))
+            table += '{\small from %s}\n' % tex_sanitize(str(self._pf.process))
+        else:
+            table = '%s\n\n' % tex_sanitize(str(self._pf.process))
+
         fg_cols = min(self.max_cols + 1, self.pdim)
-        table += '\n{\\scriptsize\\sffamily\n\\begin{tabularx}{\\textwidth}{|X|%s|' % (
+        table += '\n{\\scriptsize\\sffamily\n\\begin{tabularx}{\\textwidth}{|>{\hangindent=3ex}X|%s|' % (
             'c@{~}' * fg_cols)
         if aggregate:
             table += 'c|'
@@ -75,7 +85,7 @@ class ForegroundTeX(object):
         xtilde = self._f.x_tilde()
         af = self._f.Af.todense().tolist()
         for row, fg in enumerate(self._f.foreground):
-            table += tex_sanitize('(%d) %s [%s]' % (row, fg.flow['Name'], fg.process['SpatialScope']))
+            table += tex_sanitize('(%d) %s' % (row, fg.table_label()))
             if row >= self.max_cols:
                 agg_add = ' & %4.3g' % xtilde[row]
             else:
@@ -170,14 +180,16 @@ class ForegroundTeX(object):
             agg_string = '$\\tilde{b_f}$'
         else:
             agg_string = None
-        table = self._table_header('Cutoffs', aggregate=agg_string)
+        # table = self._table_header('Cutoffs', aggregate=agg_string)
         table = self._do_dep_table(self._f.cutoffs, self._f.Bf_cutoff, aggregate, max_rows)
 
+        if len(table) > 12:
+            table += '\\hline\n'  # add a double line to get a nice break between sections
         return table
 
-    def foreground_table(self, ad_rows=30, bf_rows=30, max_rows=42, aggregate=False):
+    def foreground_table(self, ad_rows=30, bf_rows=30, max_rows=42, aggregate=False, section=False):
         total_rows = len(self._f.foreground)
-        table = self._table_start(aggregate)
+        table = self._table_start(aggregate=aggregate, section=section)
         if total_rows > max_rows:
             table += self._table_end()
             table += 'Very large foreground ($p=%d$) omitted.\n' % total_rows

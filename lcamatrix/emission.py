@@ -61,5 +61,12 @@ class Emission(object):
     def __str__(self):
         return '%s: %s [%s]' % (self._direction, self._flow['Name'], ', '.join(filter(None, self.compartment)))
 
-    def table_label(self):
+    def table_label(self, concise=False):
+        """
+
+        :param concise: [False] omit the compartment
+        :return:
+        """
+        if concise:
+            return '%s: %s' % (self._direction, self._flow['Name'])
         return str(self)
