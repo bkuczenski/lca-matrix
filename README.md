@@ -1,6 +1,33 @@
 # LCA Matrix Work
 
-Tasks:
+This repository provides software for matrix-based computation of LCI results.
+
+## How does it work?
+
+The BackgroundManager software performs a [partial ordering](https://www.researchgate.net/publication/282879534) of a database stored in an [LcArchive](https://github.com/bkuczenski/lca-tools).  The ordering identifies strongly connected components, and thus allows for automatic distinction between the foreground and background of an LCI database:
+
+ * the _background_ includes processes whose parameters affect all results in the database;
+ * the _foreground_ includes processes whose parameters affect only the product system that uses them.
+
+The ordering results in an implicit grouping of the _flows_ in a database:
+
+ * _product flows_ are the reference flows of a process in the database.
+ * _exterior_ flows are flows for which only one terminus is present in the database (e.g. flows that appear as an input but nowhere as an output, or vice versa).  Reference flows are excluded from exterior flows.
+   * Exterior flows whose _compartments_ are elementary are called elementary flows or _emissions_ (even if they are inputs).
+   * Intermediate exterior flows are called _cutoff flows_.
+
+Mathematically, product flows make up the rows and columns of the $A$ matrix, and exterior flows make up the rows of the $B$ matrix.  Although the $B$ matrix is traditionally used only for emissions, here they are included in the $B$ matrix together because emissions and cutoff flows are mathematically identical.
+
+### Model components
+
+The `BackgroundManager` satisfies the LciInterface specified in the `lca-tools` repository (TODO).  
+
+
+### Allocation Issues
+
+
+
+Tasks: (FINISHED)
 
  * replicate Partial Ordering work:
    1. Construct a square technology matrix from a collection of inventories BA^-1 * x
