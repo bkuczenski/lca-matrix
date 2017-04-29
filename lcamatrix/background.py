@@ -99,6 +99,9 @@ def resolve_termination(exchange, terms, strategy):
          'first' - take the first match (alphabetically by process name)
          'last' - take the last match (alphabetically by process name)
 
+    This is some kind of crazy orphan function.  Maybe it belongs here- really, this stands in for the entire
+     ocelot project.  Think of it as a stub, to put it mildly.  THe only serious disadvantage is that it introduces
+     a dependency on lca-tools, which is really not acceptable.  It should be moved into LcArchive.
     :param exchange:
     :param terms:
     :param strategy:
@@ -183,7 +186,7 @@ class BackgroundManager(object):
 
     @property
     def required_recursion_limit(self):
-        return self._rec_limit
+        return max(sys.getrecursionlimit(), self._rec_limit)
 
     @property
     def mdim(self):
@@ -256,7 +259,7 @@ class BackgroundManager(object):
     def _index_archive(self):
         """
         Creates a dict of reference flows known to the archive.  The dict maps (flow, direction) to a list of
-        processes which terminate it.
+        processes which terminate it.  This should be made part of the archive interface.
         :return:
         """
         for p in self.archive.processes():
@@ -362,6 +365,55 @@ class BackgroundManager(object):
 
         b = self._b_matrix * total
         return total, b
+
+    def inventory(self, product_flow, print=None):
+        """
+        Report the direct dependencies and exterior flows for the named product flow.  If the second argument is
+        non-None, print the inventory instead of returning it.
+        This should be identical to product_flow.process.inventory() so WHY DID I WRITE IT??????
+        ans: because it exposes the allocated matrix model. so it's not the same for allocated processes.
+        :param product_flow:
+        :param print: [None] if present, show rather than return the inventory.
+        :return: a list of exchanges.
+        """
+        interior = [ExchangeValue(product_flow.process, product_flow.flow, product_flow.direction, value=1.0)]
+        exterior = []
+        if self.is_background(product_flow):
+            _af, _ad, _bf = self.make_foreground(product_flow)
+            for i, row in enumerate(_ad.nonzero()[0]):
+                dep = self.tstack.bg_node(row)
+                dat = _ad.data[i]
+                if dat < 0:
+                    dirn = 'Output'
+                else:
+                    dirn = 'Input'
+                interior.append(ExchangeValue(product_flow.process, dep.flow, dirn, value=abs(dat)))
+            for i, row in enumerate(_bf.nonzero()[0]):
+                ems = self.emissions[row]
+                dat = _bf.data[i]
+                exterior.append(ExchangeValue(product_flow.process, ems.emission.flow, ems.emission.direction,
+                                              value=dat))
+        else:
+            for fg in self._foreground:
+                if fg.parent.index == product_flow.index:
+                    dat = fg.value
+                    if dat < 0:
+                        dirn = 'Output'
+                    else:
+                        dirn = 'Input'
+                    interior.append(ExchangeValue(product_flow.process, fg.term.flow, dirn, value=dat))
+            for em in self._cutoff:
+                if em.parent.index == product_flow.index:
+                    exterior.append(ExchangeValue(product_flow.process, em.emission.flow, em.emission.direction,
+                                                  value=em.value))
+        if print is None:
+            return interior + exterior
+        else:
+            for x in interior:
+                print('%s' % x)
+            print('Exterior')
+            for x in exterior:
+                print('%s' % x)
 
     def _construct_b_matrix(self):
         """
@@ -493,7 +545,7 @@ class BackgroundManager(object):
         _bf = self.construct_sparse(num_bf, self.mdim, pdim)
         if len(fg_cutoff) > 0:
             for co in fg_cutoff:
-                # TODO - make these into a matrix too
+                # this should never happen
                 print('Losing FG Cutoff %s' % co)
         return _af, _ad, _bf
 
@@ -521,15 +573,15 @@ class BackgroundManager(object):
 
         # self.make_foreground()
 
-    def add_all_ref_products(self, multi_term='first', default_allocation=None):
+    def add_all_ref_products(self, multi_term='first', default_allocation=None, net_coproducts=True):
         for p in self.archive.processes():
-            for x in p.reference_entity:
+            for x in p.references():
                 j = self._check_product_flow(x.flow, p)
                 if j is None:
-                    self._add_ref_product(x.flow, p, multi_term, default_allocation)
+                    self._add_ref_product(x.flow, p, multi_term, default_allocation, net_coproducts)
         self._update_component_graph()
 
-    def add_ref_product(self, flow, termination, multi_term='first', default_allocation=None):
+    def add_ref_product(self, flow, termination, multi_term='first', default_allocation=None, net_coproducts=True):
         """
         Here we are adding a reference product - column of the A + B matrix.  The termination must be supplied.
         :param flow: a product flow
@@ -541,34 +593,38 @@ class BackgroundManager(object):
          'last' - take the last match (alphabetically by process name)
          Not currently implemented.
         :param default_allocation: an LcQuantity to use for allocation if unallocated processes are encountered
+        :param net_coproducts: [True] for unallocated multi-output processes, compute net demand of coproducts instead
+         of allocating.
         :return:
         """
         j = self._check_product_flow(flow, termination)
 
         if j is None:
-            j = self._add_ref_product(flow, termination, multi_term, default_allocation)
+            j = self._add_ref_product(flow, termination, multi_term, default_allocation, net_coproducts)
             self._update_component_graph()
         return j
 
-    def _add_ref_product(self, flow, termination, multi_term, default_allocation):
+    def _add_ref_product(self, flow, termination, multi_term, default_allocation, net_coproducts):
         old_recursion_limit = sys.getrecursionlimit()
         sys.setrecursionlimit(self.required_recursion_limit)
 
         j = self._create_product_flow(flow, termination)
-        self._traverse_term_exchanges(j, multi_term, default_allocation)
+        self._traverse_term_exchanges(j, multi_term, default_allocation, net_coproducts)
 
         sys.setrecursionlimit(old_recursion_limit)
         return j
 
-    def _traverse_term_exchanges(self, parent, multi_term, default_allocation=None):
+    def _traverse_term_exchanges(self, parent, multi_term, default_allocation, net_coproducts):
         """
         Implements the Tarjan traversal
         :param parent: a ProductFlow
         :param default_allocation:
+        :param net_coproducts:
         :return:
         """
         rx = parent.process.find_reference(parent.flow)
         no_alloc = False
+        cutoff_refs = False
         if not parent.process.is_allocated(rx):
             if len(parent.process.reference_entity) > 1:
                 if default_allocation is not None:
@@ -577,33 +633,60 @@ class BackgroundManager(object):
                     no_alloc = True
 
         if no_alloc:
-            print('Cutting off at un-allocated multi-output process:\n %s\n %s' % (parent.process, rx))
-            exchs = []
+            if net_coproducts:
+                exchs = [x for x in parent.process.exchanges()]
+                cutoff_refs = True
+            else:
+                print('Cutting off at un-allocated multi-output process:\n %s\n %s' % (parent.process, rx))
+                exchs = []
         else:
             exchs = [x for x in parent.process.exchanges()]
 
-        for exch in exchs:  # unallocated exchanges, including reference exchs
-            if exch in parent.process.reference_entity:
+        for exch in exchs:  # unallocated exchanges
+            if not isinstance(exch, ExchangeValue):
                 continue
-            val = exch[rx]
+            if cutoff_refs:
+                val = pval = exch.value
+            else:
+                val = pval = exch[rx]
             if val is None or val == 0:
                 # don't add zero entries (or descendants) to sparse matrix
                 continue
+            # interior flow-- enforce normative direction
+            if exch.direction == 'Output':
+                pval *= -1
+            if exch in parent.process.reference_entity:
+                if cutoff_refs:
+                    # for net coproducts- all coproducts after the first are simply created as free sources
+                    i = self._check_product_flow(exch.flow, parent.process)
+                    if i == parent:
+                        # don't add ourself as a coproduct
+                        # Except this masks self-dependencies!!!!!!! hmmmm. it shouldn't bc self-dependencies are not
+                        # refs. hmmm.........
+                        continue
+                    if i is None:
+                        i = self._create_product_flow(exch.flow, parent.process)
+                        net = self._add_emission(exch.flow, exch.direction)
+                        # TODO: This should be 1.0 instead of val, but entries get auto-normalized in adjust_val()
+                        self.add_cutoff(i, net, val)
+                    # then the first also generates the coproducts; activity levels of free sources will be net demand
+                    self.add_interior(parent, i, pval)
+                # in either case, we're done with the exchange
+                continue
+            # normal non-reference exchange. Either a dependency (if interior) or a cutoff (if exterior).
             term = self.terminate(exch, multi_term)
             if term is None:
-                # cutoff
+                # cutoff -- add the exchange value to the exterior matrix
                 emission = self._add_emission(exch.flow, exch.direction)  # check, create, and add all at once
                 self.add_cutoff(parent, emission, val)
                 continue
 
-            # interior flow-- enforce normative direction
-            if exch.direction == 'Output':
-                val *= -1
+            # so it's interior-- does it exist already?
             i = self._check_product_flow(exch.flow, term)
             if i is None:
                 # not visited -- need to visit
                 i = self._create_product_flow(exch.flow, term)
-                self._traverse_term_exchanges(i, multi_term, default_allocation)
+                self._traverse_term_exchanges(i, multi_term, default_allocation, net_coproducts)
                 # carry back lowlink, if lower
                 self._set_lowlink(parent, self._lowlink(i))
             elif self.tstack.check_stack(i):
@@ -612,7 +695,8 @@ class BackgroundManager(object):
             else:
                 # visited, not on stack- nothing to do
                 pass
-            self.add_interior(parent, i, val)
+            # add the exchange value to the interior matrix
+            self.add_interior(parent, i, pval)
 
         # name an SCC if we've found one
         if self._lowlink(parent) == self.index(parent):

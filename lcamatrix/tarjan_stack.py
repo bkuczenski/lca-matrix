@@ -19,6 +19,7 @@ class TarjanStack(object):
         self._background = None  # single scc_id representing largest scc
         self._downstream = set()  # sccs on which background depends
 
+        self._bg_processes = []  # ordered list of background nodes
         self._fg_processes = []  # ordered list of foreground nodes
         self._bg_index = dict()  # maps product_flow.index to a* / b* column -- STATIC
         self._fg_index = dict()  # maps product_flow.index to af / ad/ bf column -- VOLATILE
@@ -83,9 +84,17 @@ class TarjanStack(object):
 
     def _generate_bg_index(self):
         if self._background is None:
+            self._bg_processes = []
             self._bg_index = dict()
         else:
-            bg = [b.index for b in self.background_flows()]  # list of ProductFlow.index values of background nodes
+            bg = []
+            for i in self.scc(self._background):
+                bg.append(i)
+            for i in self._downstream:
+                for j in self.scc(i):
+                    bg.append(j)
+
+            self._bg_processes = bg
             self._bg_index = dict((ind, n) for n, ind in enumerate(bg))  # mapping of *pf* index to a-matrix index
 
     def _generate_foreground_index(self):
@@ -196,13 +205,16 @@ class TarjanStack(object):
         Generator. Yields product flows in the db background or downstream.
         :return:
         """
-        if self._background is None:
-            return
-        for i in self.scc(self._background):
+        for i in self._bg_processes:
             yield i
-        for i in self._downstream:
-            for j in self.scc(i):
-                yield j
+
+    def bg_node(self, bg_index):
+        """
+        Returns a ProductFlow corresponding to the supplied background column.
+        self.bg_node(self.bg_dict(x.index)) = x
+        :param bg_index: row / column number of A* or column of B*
+        :return: ProductFlow
+        """
 
     def bg_dict(self, pf_index):
         """
@@ -217,7 +229,8 @@ class TarjanStack(object):
 
     def fg_node(self, fg_index):
         """
-        Returns a ProductFlow corresponding to the supplied input column
+        Returns a ProductFlow corresponding to the supplied input column.
+        self.fg_node(self.fg_dict(x.index)) = x
         :param fg_index:
         :return:
         """

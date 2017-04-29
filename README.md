@@ -25,33 +25,14 @@ The `BackgroundManager` satisfies the LciInterface specified in the `lca-tools` 
 
 ### Allocation Issues
 
+Conventional practice in LCA requires multi-functional processes to be represented as single-output processes in order to construct an invertible technology matrix.  However, there are alternative approaches that still allow an invertible matrix to be constructed.
 
+ 1. In-place substitution.  If a co-product is substituted by a single-output process that already exists in the database, then the two products can simply be made synonymous -- both assigned the same row+column in the technology matrix.  In this case, inversion of the matrix can compute the activity levels of all processes in a way that solves the production problem, with the single-output process making up the difference (positive or negative) between the joint production amount and the demanded amount.  This is (or appears to be effectively) what Ecoinvent's Allocation-at-the-point-of-substitution system model implements.
 
-Tasks: (FINISHED)
+ 2- Surplus Co-product.  An un-allocated multi-output process can be implemented directly as-is in a technology matrix simply by selecting any one of the reference exchanges to be the process's single "primary" reference, and listing the process's other reference flows directly (negating outputs as appropriate).  The technology matrix will still be invertible if the other reference flows are also provided "cut-off" processes to act as unconstrained sources or sinks for the co-products.  In this case, the unallocated process will simply be operated at the level required by demand for its primary reference product, and the other reference products will be produced as surplus products.  Demand for these products from elsewhere in the system will reduce the surplus, and the matrix inversion will end up computing the net surplus (or net requirement, if negative) of each surplus co-product.  Co-products in this arrangement do not balance when the technology matrix is inverted-- but that may be appropriate if the consuming processes are not modeled within the database.  
 
- * replicate Partial Ordering work:
-   1. Construct a square technology matrix from a collection of inventories BA^-1 * x
-   2. Modify the matrix to be a normalized adjacency matrix B(I-A)^-1 * x
-   3. Detect strongly connected components
-   4. Order the matrix
-   
- * Implement foreground / background discovery
- 
- * Construct foreground studies from final demand
- 
- * Construct case studies for publishing paper.
- 
- 
-Ideally this will be done without using `lca-tools`, but on the other hand, why should that be an ideal?
+Implementing co-products-to-cutoff requires knowledge of which materials are surplus products. This cannot be determined in advance of constructing the entire technology matrix, and it may vary depending on the functional unit required.  Currently, the default behavior is to apply the surplus-coproduct approach when unallocated processes are encountered, but [TODO: keeps a record of surplus co-products, which are accounted for in the exterior matrix.]  These will always be a subset of cutoff flows.  [TODO: The BackgroundManager also has a flag `fully_allocated` which will report False if the list of surplus co-products is nonempty.]
 
-Upon review, given that the linking algorithm must be capable of auto-creating new market processes, it only makes sense for `lca-tools` to be an import.  That is ultimately a good thing, because it will provide guidance in instrumenting `lca-tools` with unit tests.
-
-Other tasks that are blocking me:
-
- - lack of testing / interface definition for `lca-tools`, particularly with exchanges, especially with allocated exchanges
- - Compartments refactor needs to be finished and merged.
- - flow synonym problems with USLCI-- looks like they don't exist! (at least when we limit our concern to interior flows-- see narrative below) 
- - `lca-tools` should not depend on `pandas` - I'm only using it in one place, and only for spreadsheet handling.
 
 ## narrative
 
