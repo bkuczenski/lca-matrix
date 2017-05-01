@@ -6,7 +6,6 @@ So for the time being we are safe.
 may need to use threading to go higher (see http://stackoverflow.com/questions/2917210/)
 Validate recursion depth on a given system using PYTHONROOT/Tools/scripts/find_recursionlimit.py
 """
-import os
 import sys  # for recursion limit
 import re  # for product_flows search
 
@@ -20,7 +19,7 @@ from lcamatrix.emission import Emission
 
 from collections import defaultdict
 from lcatools.exchanges import ExchangeValue, comp_dir
-from lcatools.entities import LcProcess
+
 
 MAX_SAFE_RECURSION_LIMIT = 18000  # this should be validated using
 
@@ -81,49 +80,12 @@ class CutoffEntry(MatrixProto):
         return self._term
 
 
-DEFAULT_DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
-
-
 class NoMatchingReference(Exception):
     pass
 
 
 class NoAllocation(Exception):
     pass
-
-
-def resolve_termination(exchange, terms, strategy):
-    """
-         'cutoff' - call the flow a cutoff and ignore it
-         'mix' - create a new "market" process that mixes the inputs
-         'first' - take the first match (alphabetically by process name)
-         'last' - take the last match (alphabetically by process name)
-
-    This is some kind of crazy orphan function.  Maybe it belongs here- really, this stands in for the entire
-     ocelot project.  Think of it as a stub, to put it mildly.  THe only serious disadvantage is that it introduces
-     a dependency on lca-tools, which is really not acceptable.  It should be moved into LcArchive.
-    :param exchange:
-    :param terms:
-    :param strategy:
-    :return:
-    """
-    if len(terms) == 1:
-        return terms[0]
-    elif len(terms) == 0 or strategy == 'cutoff':
-        return None
-    elif strategy == 'mix':
-        p = LcProcess.new('Market for %s' % exchange.flow['Name'], Comment='Auto-generated')
-        p.add_exchange(exchange.flow, comp_dir(exchange.direction), value=float(len(terms)))
-        p.add_reference(exchange.flow, comp_dir(exchange.direction))
-        for t in terms:
-            p.add_exchange(exchange.flow, exchange.direction, value=1.0, termination=t.get_uuid())
-        return p
-    elif strategy == 'first':
-        return [t for t in sorted(terms, key=lambda x:x['Name'])][0]
-    elif strategy == 'last':
-        return [t for t in sorted(terms, key=lambda x:x['Name'])][-1]
-    else:
-        raise KeyError('Unknown multi-termination strategy %s' % strategy)
 
 
 '''
@@ -148,13 +110,10 @@ class BackgroundManager(object):
     """
     Class for managing a collection of linked processes as a coherent technology matrix.
     """
-    def __init__(self, archive, data_dir=DEFAULT_DATA_DIR):
+    def __init__(self, archive):
         """
-
-        :param data_dir:
         """
         self.archive = archive
-        self._data_dir = data_dir  # save A / Bx in sparse form? Bx isn't sparse- A may be quicker than the json
         self._lowlinks = dict()  # dict mapping product_flow key to lowlink -- which is a key into TarjanStack.sccs
 
         self.tstack = TarjanStack()  # ordering of sccs
@@ -283,7 +242,7 @@ class BackgroundManager(object):
                 if len(terms) == 1:
                     term = terms[0]
                 else:
-                    term = resolve_termination(exch, terms, strategy)
+                    term = self.archive.resolve_termination(exch, terms, strategy)
             else:
                 self._terminations[key].append(None)
                 term = None
@@ -366,14 +325,14 @@ class BackgroundManager(object):
         b = self._b_matrix * total
         return total, b
 
-    def inventory(self, product_flow, print=None):
+    def inventory(self, product_flow, show=None):
         """
         Report the direct dependencies and exterior flows for the named product flow.  If the second argument is
         non-None, print the inventory instead of returning it.
         This should be identical to product_flow.process.inventory() so WHY DID I WRITE IT??????
         ans: because it exposes the allocated matrix model. so it's not the same for allocated processes.
         :param product_flow:
-        :param print: [None] if present, show rather than return the inventory.
+        :param show: [None] if present, show rather than return the inventory.
         :return: a list of exchanges.
         """
         interior = [ExchangeValue(product_flow.process, product_flow.flow, product_flow.direction, value=1.0)]
@@ -406,7 +365,7 @@ class BackgroundManager(object):
                 if em.parent.index == product_flow.index:
                     exterior.append(ExchangeValue(product_flow.process, em.emission.flow, em.emission.direction,
                                                   value=em.value))
-        if print is None:
+        if show is None:
             return interior + exterior
         else:
             for x in interior:
@@ -643,12 +602,13 @@ class BackgroundManager(object):
             exchs = [x for x in parent.process.exchanges()]
 
         for exch in exchs:  # unallocated exchanges
-            if not isinstance(exch, ExchangeValue):
-                continue
             if cutoff_refs:
                 val = pval = exch.value
             else:
-                val = pval = exch[rx]
+                try:
+                    val = pval = exch[rx]
+                except TypeError:
+                    continue
             if val is None or val == 0:
                 # don't add zero entries (or descendants) to sparse matrix
                 continue
