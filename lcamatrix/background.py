@@ -17,9 +17,6 @@ from lcamatrix.tarjan_stack import TarjanStack
 from lcamatrix.product_flow import ProductFlow
 from lcamatrix.emission import Emission
 
-from collections import defaultdict
-from lcatools.exchanges import ExchangeValue, comp_dir
-
 
 MAX_SAFE_RECURSION_LIMIT = 18000  # this should be validated using
 
@@ -106,14 +103,14 @@ def is_elementary(flow):
 '''
 
 
-class BackgroundManager(object):
+class BackgroundEngine(object):
     """
-    Class for managing a collection of linked processes as a coherent technology matrix.
+    Class for converting a collection of linked processes into a coherent technology matrix.
     """
-    def __init__(self, archive):
+    def __init__(self, foreground):
         """
         """
-        self.archive = archive
+        self.fg = foreground
         self._lowlinks = dict()  # dict mapping product_flow key to lowlink -- which is a key into TarjanStack.sccs
 
         self.tstack = TarjanStack()  # ordering of sccs
@@ -134,9 +131,7 @@ class BackgroundManager(object):
         self._a_matrix = None  # includes only interior exchanges -- dependencies in _interior
         self._b_matrix = None  # SciPy.csc_matrix for bg only
 
-        self._terminations = defaultdict(list)
-        self._index_archive()  # dict of reference flows to terminating processes.
-        self._rec_limit = len(self.archive.processes())
+        self._rec_limit = len(self.fg.processes())
         if self.required_recursion_limit > MAX_SAFE_RECURSION_LIMIT:
             raise EnvironmentError('This database may require too high a recursion limit-- time to learn lisp.')
 
@@ -182,7 +177,7 @@ class BackgroundManager(object):
         else:
             self._lowlinks[pf.key] = lowlink
 
-    def _check_product_flow(self, flow, termination):
+    def check_product_flow(self, flow, termination):
         """
         returns the product flow if it exists, or None if it doesn't
         :param flow:
@@ -190,9 +185,8 @@ class BackgroundManager(object):
         :return:
         """
         if termination is None:
-            k = (flow.uuid, None)
-        else:
-            k = (flow.uuid, termination.uuid)
+            raise ValueError('Must supply a termination')
+        k = (flow.uuid, termination.uuid)
         if k in self._product_flows:
             return self.product_flow(self._product_flows[k])
         else:
@@ -215,16 +209,6 @@ class BackgroundManager(object):
             self._ef_index.append(ef)
             return ef
 
-    def _index_archive(self):
-        """
-        Creates a dict of reference flows known to the archive.  The dict maps (flow, direction) to a list of
-        processes which terminate it.  This should be made part of the archive interface.
-        :return:
-        """
-        for p in self.archive.processes():
-            for rx in p.references():
-                self._terminations[(rx.flow.uuid, comp_dir(rx.direction))].append(p)
-
     def terminate(self, exch, strategy):
         """
         Find the ProductFlow that terminates a given exchange.  If an exchange has an explicit termination, use it.
@@ -234,19 +218,25 @@ class BackgroundManager(object):
         :return:
         """
         if exch.termination is not None:
-            term = self.archive[exch.termination]
+            return self.fg[exch.termination]
         else:
-            key = (exch.flow.uuid, exch.direction)
-            if key in self._terminations:
-                terms = self._terminations[key]
-                if len(terms) == 1:
-                    term = terms[0]
-                else:
-                    term = self.archive.resolve_termination(exch, terms, strategy)
+            terms = [t for t in self.fg.terminate(exch.flow, direction=exch.direction)]
+            if len(terms) == 0:
+                return None
+            elif len(terms) == 1:
+                term = terms[0]
             else:
-                self._terminations[key].append(None)
-                term = None
-        return term
+                if strategy == 'first':
+                    term = terms[0]
+                elif strategy == 'last':
+                    term = terms[-1]
+                elif strategy == 'cutoff':
+                    return None
+                elif strategy == 'mix':
+                    return self.fg.mix(exch.flow, exch.direction)
+                else:
+                    raise KeyError('Unknown multi-termination strategy %s' % strategy)
+            return self.fg[term.external_ref]  # required to get full exchange list
 
     @staticmethod
     def construct_sparse(nums, nrows, ncols):
@@ -269,32 +259,17 @@ class BackgroundManager(object):
 
     def compute_lci(self, product_flow, **kwargs):
         if self.is_background(product_flow):
-            ad, bf_tilde = self.make_background(product_flow)
+            num_ad = sp.array([[self.tstack.bg_dict(product_flow.index), 0, 1.0]])
+            ad = self.construct_sparse(num_ad, self.tstack.ndim, 1)
             x, bx = self.compute_bg_lci(ad, **kwargs)
+            return bx
         else:
             af, ad, bf = self.make_foreground(product_flow)
             x_tilde = np.linalg.inv(np.eye(af.shape[0]) - af.todense())[:, 0]
             ad_tilde = ad * x_tilde
             x, bx = self.compute_bg_lci(ad_tilde, **kwargs)
             bf_tilde = csc_matrix(bf * x_tilde)
-        return x, bx, bf_tilde
-
-    def lci(self, product_flow, **kwargs):
-        """
-        Wrapper for compute_lci, returns exchanges with flows (and characterizations) drawn from self.archive
-        :param product_flow: we need some way to figure out which process the exchanges belong to, so for now we
-        ask the user
-        :param product_flow:
-        :return: list of exchanges.
-        """
-        x, bx, bf_tilde = self.compute_lci(product_flow, **kwargs)
-        b = bx + bf_tilde
-        exchanges = []
-        for i, em in enumerate(self._ef_index):
-            if b[i, 0] != 0:
-                flow = self.archive[em.key[0]]
-                exchanges.append(ExchangeValue(product_flow.process, flow, em.direction, value=b[i, 0]))
-        return exchanges
+        return bx + bf_tilde
 
     def compute_bg_lci(self, ad, threshold=1e-8, count=100):
         """
@@ -325,55 +300,6 @@ class BackgroundManager(object):
         b = self._b_matrix * total
         return total, b
 
-    def inventory(self, product_flow, show=None):
-        """
-        Report the direct dependencies and exterior flows for the named product flow.  If the second argument is
-        non-None, print the inventory instead of returning it.
-        This should be identical to product_flow.process.inventory() so WHY DID I WRITE IT??????
-        ans: because it exposes the allocated matrix model. so it's not the same for allocated processes.
-        :param product_flow:
-        :param show: [None] if present, show rather than return the inventory.
-        :return: a list of exchanges.
-        """
-        interior = [ExchangeValue(product_flow.process, product_flow.flow, product_flow.direction, value=1.0)]
-        exterior = []
-        if self.is_background(product_flow):
-            _af, _ad, _bf = self.make_foreground(product_flow)
-            for i, row in enumerate(_ad.nonzero()[0]):
-                dep = self.tstack.bg_node(row)
-                dat = _ad.data[i]
-                if dat < 0:
-                    dirn = 'Output'
-                else:
-                    dirn = 'Input'
-                interior.append(ExchangeValue(product_flow.process, dep.flow, dirn, value=abs(dat)))
-            for i, row in enumerate(_bf.nonzero()[0]):
-                ems = self.emissions[row]
-                dat = _bf.data[i]
-                exterior.append(ExchangeValue(product_flow.process, ems.emission.flow, ems.emission.direction,
-                                              value=dat))
-        else:
-            for fg in self._foreground:
-                if fg.parent.index == product_flow.index:
-                    dat = fg.value
-                    if dat < 0:
-                        dirn = 'Output'
-                    else:
-                        dirn = 'Input'
-                    interior.append(ExchangeValue(product_flow.process, fg.term.flow, dirn, value=dat))
-            for em in self._cutoff:
-                if em.parent.index == product_flow.index:
-                    exterior.append(ExchangeValue(product_flow.process, em.emission.flow, em.emission.direction,
-                                                  value=em.value))
-        if show is None:
-            return interior + exterior
-        else:
-            for x in interior:
-                print('%s' % x)
-            print('Exterior')
-            for x in exterior:
-                print('%s' % x)
-
     def _construct_b_matrix(self):
         """
         b matrix only includes emissions from background + downstream processes.
@@ -392,7 +318,7 @@ class BackgroundManager(object):
                            for i in self._interior])
         self._a_matrix = self.construct_sparse(num_bg, ndim, ndim)
 
-    def product_flows(self, search=None, outputs=True):
+    def foreground_flows(self, search=None, outputs=True):
         for k in self.tstack.foreground_flows(outputs=outputs):
             if search is None:
                 yield k
@@ -407,6 +333,16 @@ class BackgroundManager(object):
             else:
                 if bool(re.search(search, str(k), flags=re.IGNORECASE)):
                     yield k
+
+    def foreground_dependencies(self, product_flow):
+        for fg in self._foreground:
+            if fg.parent.index == product_flow.index:
+                yield fg
+
+    def foreground_emissions(self, product_flow):
+        for co in self._cutoff:
+            if co.parent.index == product_flow.index:
+                yield co
 
     def foreground(self, pf):
         """
@@ -427,17 +363,6 @@ class BackgroundManager(object):
         :return: bool
         """
         return self.tstack.is_background(pf)
-
-    def make_background(self, product_flow):
-        """
-        Constructs sparse ad representing background product flow
-        :param product_flow:
-        :return: ad, bf where ad has one nonzero entry (corresponding to product flow = 1.0) and bf is all zeros
-        """
-        num_ad = sp.array([[self.tstack.bg_dict(product_flow.index), 0, 1.0]])
-        _ad = self.construct_sparse(num_ad, self.tstack.ndim, 1)
-        _bf = self.construct_sparse([], self.mdim, 1)
-        return _ad, _bf
 
     def make_foreground(self, product_flow=None):
         """
@@ -533,9 +458,9 @@ class BackgroundManager(object):
         # self.make_foreground()
 
     def add_all_ref_products(self, multi_term='first', default_allocation=None, net_coproducts=True):
-        for p in self.archive.processes():
+        for p in self.fg.processes():
             for x in p.references():
-                j = self._check_product_flow(x.flow, p)
+                j = self.check_product_flow(x.flow, p)
                 if j is None:
                     self._add_ref_product(x.flow, p, multi_term, default_allocation, net_coproducts)
         self._update_component_graph()
@@ -544,7 +469,7 @@ class BackgroundManager(object):
         """
         Here we are adding a reference product - column of the A + B matrix.  The termination must be supplied.
         :param flow: a product flow
-        :param termination: a process that includes the product flow among its reference exchanges (input OR output)
+        :param termination: a process that includes the product flow among its reference exchanges (input OR output).
         :param multi_term: ['first'] specify how to handle ambiguous terminations.  Possible answers are:
          'cutoff' - call the flow a cutoff and ignore it
          'mix' - create a new "market" process that mixes the inputs
@@ -556,18 +481,19 @@ class BackgroundManager(object):
          of allocating.
         :return:
         """
-        j = self._check_product_flow(flow, termination)
+        j = self.check_product_flow(flow, termination)
+        term = self.fg[termination.external_ref]
 
         if j is None:
-            j = self._add_ref_product(flow, termination, multi_term, default_allocation, net_coproducts)
+            j = self._add_ref_product(flow, term, multi_term, default_allocation, net_coproducts)
             self._update_component_graph()
         return j
 
-    def _add_ref_product(self, flow, termination, multi_term, default_allocation, net_coproducts):
+    def _add_ref_product(self, flow, term, multi_term, default_allocation, net_coproducts):
         old_recursion_limit = sys.getrecursionlimit()
         sys.setrecursionlimit(self.required_recursion_limit)
 
-        j = self._create_product_flow(flow, termination)
+        j = self._create_product_flow(flow, term)
         self._traverse_term_exchanges(j, multi_term, default_allocation, net_coproducts)
 
         sys.setrecursionlimit(old_recursion_limit)
@@ -618,7 +544,7 @@ class BackgroundManager(object):
             if exch in parent.process.reference_entity:
                 if cutoff_refs:
                     # for net coproducts- all coproducts after the first are simply created as free sources
-                    i = self._check_product_flow(exch.flow, parent.process)
+                    i = self.check_product_flow(exch.flow, parent.process)
                     if i == parent:
                         # don't add ourself as a coproduct
                         # Except this masks self-dependencies!!!!!!! hmmmm. it shouldn't bc self-dependencies are not
@@ -642,7 +568,7 @@ class BackgroundManager(object):
                 continue
 
             # so it's interior-- does it exist already?
-            i = self._check_product_flow(exch.flow, term)
+            i = self.check_product_flow(exch.flow, term)
             if i is None:
                 # not visited -- need to visit
                 i = self._create_product_flow(exch.flow, term)

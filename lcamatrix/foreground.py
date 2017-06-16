@@ -249,5 +249,5 @@ class ForegroundFragment(object):
         return self.compute_lcia(self._bx)
 
     def pf_lcia(self, pf):
-        _, bx, bftilde = self._bg.compute_lci(pf)
-        return self.compute_lcia(bx + bftilde)
+        bx = self._bg.compute_lci(pf)
+        return self.compute_lcia(bx)

@@ -104,7 +104,6 @@ class ForegroundPublication(object):
         self._e_col_key = None
 
         if self._lcia:
-            # # outmoded: select only characterizations for foreground emissions
             if audit_cf:
                 self._e = fragment.E.tocoo()
                 self._bf_seen = [k for i, k in enumerate(fragment.emissions) if
@@ -197,21 +196,21 @@ class ForegroundPublication(object):
         if ad is None:
             return 'Key', 'Origin', 'Identifier', 'ReferenceUnit', 'Name', 'FlowDirection', 'ReferenceFlow'
         else:
-            return (self.key(ad), ad.process.origin, ad.process.get_external_ref(), ad.flow.unit(),
+            return (self.key(ad), ad.process.origin, ad.process.external_ref, ad.flow.unit(),
                     str(ad.process), ad.direction, ad.flow.get_external_ref())
 
     def _print_co(self, co=None):
         if co is None:
             return 'Key', 'Origin', 'Identifier', 'ReferenceUnit', 'Name', 'FlowDirection'
         else:
-            return (self.key(co), co.flow.origin, co.flow.get_external_ref(), co.flow.unit(), co.flow['Name'],
+            return (self.key(co), co.flow.origin, co.flow.external_ref, co.flow.unit(), co.flow['Name'],
                     co.direction)
 
     def _print_bf(self, bf=None):
         if bf is None:
             return 'Key', 'Origin', 'Identifier', 'ReferenceUnit', 'Name', 'FlowDirection', 'Compartment'
         else:
-            return (self.key(bf), bf.flow.origin, bf.flow.get_external_ref(), bf.flow.unit(), bf.flow['Name'],
+            return (self.key(bf), bf.flow.origin, bf.flow.external_ref, bf.flow.unit(), bf.flow['Name'],
                     bf.direction, '; '.join(filter(None, bf.compartment)))
 
     def publish(self, filename, full=False):
