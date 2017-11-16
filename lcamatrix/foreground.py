@@ -207,7 +207,7 @@ class ForegroundFragment(object):
             else:
                 cf = self._db.lookup_single_cf(em.flow, quantity)
                 if cf is not None:
-                    em.flow.add_characterization(cf)
+                    em.flow.add_characterization(cf.quantity, value=cf.value)
                     nums.append((0, m, cf.value))
         e = self._bg.construct_sparse(np.array(nums), 1, self.mdim)
         self._lcia.append(e)

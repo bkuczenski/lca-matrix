@@ -59,7 +59,8 @@ class Emission(object):
         return self._direction
 
     def __str__(self):
-        return '%s: %s [%s]' % (self._direction, self._flow['Name'], ', '.join(filter(None, self.compartment)))
+        return '%s: %s [%s] (%s)' % (self._direction, self._flow['Name'], ', '.join(filter(None, self.compartment)),
+                                     self._flow.unit())
 
     def table_label(self, concise=False):
         """
@@ -68,5 +69,5 @@ class Emission(object):
         :return:
         """
         if concise:
-            return '%s: %s' % (self._direction, self._flow['Name'])
+            return '%s: %s (%s)' % (self._direction, self._flow['Name'], self._flow.unit())
         return str(self)

@@ -81,7 +81,7 @@ class ForegroundTeX(object):
             agg_string = ''
         else:
             agg_string = None
-        table = self._table_header('(node) Foreground flow', aggregate=agg_string)
+        table = self._table_header('(node) Foreground flows -- $A_f$', aggregate=agg_string)
         xtilde = self._f.x_tilde()
         af = self._f.Af.todense().tolist()
         for row, fg in enumerate(self._f.foreground):
@@ -160,7 +160,7 @@ class ForegroundTeX(object):
             agg_string = '$\\tilde{a_d}$'
         else:
             agg_string = None
-        table = self._table_header('Background Dependencies', aggregate=agg_string)
+        table = self._table_header('Background Dependencies -- $A_d$', aggregate=agg_string)
         table += self._do_dep_table(self._f.bg_flows, self._f.Ad, aggregate, max_rows)
 
         return table
@@ -170,7 +170,7 @@ class ForegroundTeX(object):
             agg_string = '$\\tilde{b_f}$'
         else:
             agg_string = None
-        table = self._table_header('Foreground Emissions', aggregate=agg_string)
+        table = self._table_header('Foreground Emissions -- $B_f$', aggregate=agg_string)
         table += self._do_dep_table(self._f.elementary, self._f.Bf_elementary, aggregate, max_rows)
 
         return table
